@@ -164,6 +164,9 @@ const Admin = () => {
     u.department?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Live employee data for the detail modal, refreshed by the fetchUsers poll.
+  const liveEmp = users.find(u => u.id === selEmp?.id) ?? selEmp;
+
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
   const fetchSessions = async (uid: string): Promise<WorkSession[]> => {
@@ -231,6 +234,9 @@ const Admin = () => {
             }
             if (s.date>=ago7s && s.clockInLocation) hist.push(s);
           });
+
+          // Newest first — the maps treat sessionHistory[0] as the live/LATEST pin.
+          hist.sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));
         } catch {}
 
         const t30=l30w+l30b;
@@ -1090,7 +1096,7 @@ const Admin = () => {
                       </div>
                     </div>
                     <div style={{height:480}} className="p-3">
-                      <EmployeeLocationsMap employee={selEmp}/>
+                      <EmployeeLocationsMap employee={liveEmp}/>
                     </div>
                   </div>
                 </TabsContent>

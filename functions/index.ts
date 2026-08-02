@@ -11,13 +11,13 @@ import { getAnalytics, isSupported } from "firebase/analytics";
 // Best: Load from environment variables in production
 // ──────────────────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCn_5rLREJyhndTnVdDFaU74ohJ-cXeI3w",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "nte-clockin.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "nte-clockin",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "nte-clockin.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "456923511374",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:456923511374:web:cff12fe332b039fa92211f",
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-2P9P517P9V",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCtztRa_6d6q1uhdylsnZgcYMeYzXYrFIY",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "proof-of-grind.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "proof-of-grind",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "proof-of-grind.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "367030230553",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:367030230553:web:86492bec143627ee151488",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-5SBZMJZKQP",
 };
 
 // ──────────────────────────────────────────────────────────────

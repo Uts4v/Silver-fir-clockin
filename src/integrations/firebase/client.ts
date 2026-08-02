@@ -5,13 +5,13 @@ import { getFirestore } from "firebase/firestore";
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCn_5rLREJyhndTnVdDFaU74ohJ-cXeI3w",
-  authDomain: "nte-clockin.firebaseapp.com",
-  projectId: "nte-clockin",
-  storageBucket: "nte-clockin.firebasestorage.app",
-  messagingSenderId: "456923511374",
-  appId: "1:456923511374:web:cff12fe332b039fa92211f",
-  measurementId: "G-2P9P517P9V"
+  apiKey: "AIzaSyCtztRa_6d6q1uhdylsnZgcYMeYzXYrFIY",
+  authDomain: "proof-of-grind.firebaseapp.com",
+  projectId: "proof-of-grind",
+  storageBucket: "proof-of-grind.firebasestorage.app",
+  messagingSenderId: "367030230553",
+  appId: "1:367030230553:web:86492bec143627ee151488",
+  measurementId: "G-5SBZMJZKQP"
 };
 
 // Initialize Firebase
