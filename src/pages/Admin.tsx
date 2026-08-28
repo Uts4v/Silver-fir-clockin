@@ -164,6 +164,10 @@ const Admin = () => {
   const [empLoading,    setEmpLoading]    = useState(false);
   const [deptFilter,    setDeptFilter]    = useState<string>("all");
 
+  // Realtime presence: liveStatus/{uid} docs emitted by employees on every
+  // status transition. Snapshot listener → Working/Break/Offline updates instantly.
+  const [liveMap, setLiveMap] = useState<Record<string, { status: string; updatedAt: Timestamp }>>({});
+
   // Company + settings
   const [company,        setCompany]       = useState<Company|null>(null);
   const [officeLat,      setOfficeLat]     = useState("");
@@ -247,7 +251,11 @@ const Admin = () => {
         let hist:WorkSession[]=[];
 
         try {
-          const sSnap = await getDocs(collection(db,"users",usr.id,"sessions"));
+          // Bound the read to the last 32 days instead of scanning the entire
+          // session history — keeps the admin dashboard fast as data grows.
+          const ago = new Date(); ago.setDate(ago.getDate()-32);
+          const q = query(collection(db,"users",usr.id,"sessions"), where("date",">=",ago.toISOString().split("T")[0]));
+          const sSnap = await getDocs(q);
           sSnap.docs.forEach(d => {
             const s = {id:d.id,...d.data()} as WorkSession;
             if (s.date===todayStr) {
@@ -391,9 +399,24 @@ const Admin = () => {
   useEffect(()=>{ if(!authLoading&&profile?.role==="admin") fetchUsers(); },[authLoading,profile,fetchUsers]);
   useEffect(()=>{
     if(!authLoading&&profile?.role==="admin"){
-      const iv=setInterval(fetchUsers,30000); return ()=>clearInterval(iv);
+      const iv=setInterval(fetchUsers,60000); return ()=>clearInterval(iv);
     }
   },[authLoading,profile,fetchUsers]);
+
+  useEffect(()=>{
+    if (authLoading || profile?.role!=="admin" || !profile?.companyId) return;
+    const q = query(collection(db,"liveStatus"), where("companyId","==",profile.companyId));
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string,{status:string;updatedAt:Timestamp}> = {};
+      snap.forEach(d=>{
+        const data = d.data() as {status?:string;updatedAt?:Timestamp};
+        map[d.id] = { status: data.status==="working"||data.status==="break" ? data.status : "offline",
+                      updatedAt: data.updatedAt || Timestamp.fromMillis(0) };
+      });
+      setLiveMap(map);
+    }, (err)=>{ console.error("liveStatus listener error:", err); });
+    return () => unsub();
+  },[authLoading,profile?.role,profile?.companyId]);
 
   const openEmp = async (emp: UserWithStats) => {
     setEmpLoading(true); setSelEmp(emp); setEmpOpen(true);
@@ -474,9 +497,19 @@ const Admin = () => {
 
   // ── Derived data ───────────────────────────────────────────────────────────
 
-  const working  = users.filter(u=>u.currentStatus==="working").length;
-  const onBreak  = users.filter(u=>u.currentStatus==="break").length;
-  const offline  = users.filter(u=>u.currentStatus==="idle").length;
+  // Realtime status for an employee. A presence doc older than 5 minutes is
+  // treated as offline (browser closed, left the site, etc.).
+  const liveStatusOf = (uid: string): string => {
+    const lv = liveMap[uid];
+    if (!lv) return "offline";
+    const age = Date.now() - (lv.updatedAt?.toMillis?.() ?? Date.now());
+    if (age > 5 * 60 * 1000) return "offline";
+    return lv.status;
+  };
+
+  const working  = users.filter(u=>liveStatusOf(u.id)==="working").length;
+  const onBreak  = users.filter(u=>liveStatusOf(u.id)==="break").length;
+  const offline  = users.length - working - onBreak;
   const avgFocus = users.length ? users.reduce((a,u)=>a+u.focusRate,0)/users.length : 0;
   const totalCost= subscriptions.filter(s=>s.isActive).reduce((a,s)=>a+s.cost,0);
   const avgWork  = users.length ? users.reduce((a,u)=>a+u.todayWorkTime,0)/users.length : 0;
@@ -511,7 +544,8 @@ const Admin = () => {
   ] as const;
 
   const renderRow = (u: UserWithStats, idx: number) => {
-    const sc = statusCfg(u.currentStatus);
+    const st = liveStatusOf(u.id);
+    const sc = statusCfg(st);
     return (
       <motion.div key={u.id} initial={{opacity:0,x:-5}} animate={{opacity:1,x:0}} transition={{delay:idx*0.025}}
         className="pr grid px-5 py-3.5 border-b border-white/[0.04] last:border-0 group items-center transition-colors"
@@ -529,7 +563,7 @@ const Admin = () => {
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold"
             style={{background:sc.bg,color:sc.tx}}>
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{background:sc.dot,boxShadow:u.currentStatus==="working"?`0 0 4px ${sc.dot}`:"none"}}/>
+              style={{background:sc.dot,boxShadow:st==="working"?`0 0 4px ${sc.dot}`:"none"}}/>
             {sc.label}
           </span>
         </div>

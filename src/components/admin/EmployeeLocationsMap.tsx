@@ -65,12 +65,12 @@ export default function EmployeeLocationsMap({ employee }: EmployeeLocationsMapP
     // Custom zoom control – top-right
     L.control.zoom({ position: "topright" }).addTo(map);
 
-    // Tile layer – CartoDB Positron (clean, professional)
+    // Tile layer – OpenStreetMap standard (no API key required)
     L.tileLayer(
-      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       {
         attribution:
-          '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+          '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         maxZoom: 19,
       }
     ).addTo(map);

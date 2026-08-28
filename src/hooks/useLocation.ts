@@ -14,6 +14,36 @@ export interface LocationData {
 }
 
 /**
+ * Fast geolocation fix — lat/lng/accuracy only (no reverse geocoding).
+ * Never throws: returns null on failure or timeout. Tries a cached/low-accuracy
+ * fix first, then a high-accuracy one. Used by the geo-fence clock-in path so a
+ * slow address lookup never blocks clock-in.
+ */
+export async function getCoords(): Promise<{ lat: number; lng: number; accuracy: number } | null> {
+  if (!navigator.geolocation) return null;
+
+  const attempt = (opts: PositionOptions) =>
+    new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve(p),
+        () => resolve(null),
+        opts
+      );
+    });
+
+  const t0 = Date.now();
+  let pos =
+    (await attempt({ enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 })) ||
+    (await attempt({ enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }));
+
+  // Hard ceiling so a stuck device never hangs the clock-in flow.
+  if (Date.now() - t0 > 20000) pos = null;
+
+  if (!pos) return null;
+  return { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+}
+
+/**
  * Reverse geocode coordinates → human-readable address
  * via OpenStreetMap Nominatim (free, no API key needed)
  */
@@ -93,48 +123,14 @@ export function useLocationCapture() {
     setError(null);
 
     try {
-      const coords = await new Promise<GeolocationCoordinates>((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error("Geolocation is not supported by your browser."));
-          return;
-        }
-
-        let settled = false;
-        const finish = <T,>(fn: (v: T) => void, value: T) => {
-          if (!settled) { settled = true; fn(value); }
-        };
-
-        const onSuccess = (pos: GeolocationPosition) => finish(resolve, pos.coords);
-        const onError = (err: GeolocationPositionError) => {
-          switch (err.code) {
-            case err.PERMISSION_DENIED:
-              finish(reject, new Error(
-                "PERMISSION_DENIED: Location access was denied. Please allow location access to clock in."
-              ));
-              break;
-            case err.POSITION_UNAVAILABLE:
-              finish(reject, new Error("Location information is unavailable."));
-              break;
-            case err.TIMEOUT:
-              finish(reject, new Error("Location request timed out."));
-              break;
-            default:
-              finish(reject, new Error("An unknown location error occurred."));
-          }
-        };
-
-        // Fast attempt first (low accuracy, may use a cached fix).
-        navigator.geolocation.getCurrentPosition(
-          onSuccess,
-          () => {
-            // Fall back to a high-accuracy fix.
-            navigator.geolocation.getCurrentPosition(onSuccess, onError, {
-              enableHighAccuracy: true, timeout: 8000, maximumAge: 0,
-            });
-          },
-          { enableHighAccuracy: false, timeout: 4000, maximumAge: 30000 }
+      const coords = await getCoords();
+      if (!coords) {
+        throw new Error(
+          navigator.geolocation && navigator.permissions?.query
+            ? "Could not determine your location. Check location permissions and try again."
+            : "Geolocation is not supported by your browser."
         );
-      });
+      }
 
       const { latitude, longitude, accuracy } = coords;
       const geoInfo = await reverseGeocode(latitude, longitude);

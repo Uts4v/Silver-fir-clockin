@@ -48,15 +48,18 @@ export default function AdminLocationView({ session }: AdminLocationViewProps) {
       const map = L.map(mapRef.current!, {
         zoomControl: false,
         attributionControl: false,
-        scrollWheelZoom: false,
+        scrollWheelZoom: true,
       });
       mapInstanceRef.current = map;
 
       L.control.zoom({ position: "topright" }).addTo(map);
 
       L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-        { maxZoom: 19 }
+        "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+          attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+          maxZoom: 19,
+        }
       ).addTo(map);
 
       map.setView([loc.lat, loc.lng], 15);

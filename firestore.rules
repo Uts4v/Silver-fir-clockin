@@ -80,6 +80,19 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ── Live status / presence ─────────────────────────────────────────────
+    // Employees write their current status (working/break/offline); the company
+    // admin reads every employee's presence doc for the realtime dashboard.
+    match /liveStatus/{uid} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         myProfile().data.companyId != null &&
+         myProfile().data.companyId == resource.data.companyId)
+      );
+      allow write: if isSignedIn() && request.auth.uid == uid;
+    }
+
     // Notes/Announcements
     match /notes/{noteId} {
       // Admins can read/write all notes

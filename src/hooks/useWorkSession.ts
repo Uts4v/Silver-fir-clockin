@@ -19,8 +19,49 @@ import { db } from "@/integrations/firebase/client";
 import { useAuthContext } from "@/contexts/AuthContext";
 import type { TimerStatus, WorkSession, BreakLog, ClockInLocation, OfficeLocation } from "@/integrations/firebase/types";
 import { toast } from "sonner";
-import { useLocationCapture, LocationData } from "@/hooks/useLocation";  // new hook for geolocation
+import { useLocationCapture, getCoords, reverseGeocode } from "@/hooks/useLocation";  // new hook for geolocation
 import { distanceMeters } from "@/lib/geo";
+
+// ── Company geo-fence cache ────────────────────────────────────────────────
+// Cached in memory + localStorage (6h TTL) so clock-in never waits on a
+// companies/{id} read for every attempt.
+interface GeofenceInfo { office: OfficeLocation; radius: number }
+const geofenceCache: { companyId: string; data: GeofenceInfo | null } = { companyId: "", data: null };
+
+const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
+  if (geofenceCache.companyId === companyId) return geofenceCache.data;
+
+  const CACHE_KEY = "sf_geofence_" + companyId;
+  const cached = localStorage.getItem(CACHE_KEY);
+  if (cached) {
+    try {
+      const p = JSON.parse(cached);
+      if (p && p.office && p.radius != null && Date.now() - p.ts < 6 * 3600 * 1000) {
+        geofenceCache.companyId = companyId;
+        geofenceCache.data = { office: p.office, radius: p.radius };
+        return geofenceCache.data;
+      }
+    } catch { /* ignore corrupt cache */ }
+  }
+
+  let data: GeofenceInfo | null = null;
+  try {
+    const compSnap = await getDoc(doc(db, "companies", companyId));
+    if (compSnap.exists()) {
+      const comp = compSnap.data() as { officeLocation?: OfficeLocation; radiusMeters?: number };
+      if (comp.officeLocation && comp.radiusMeters) data = { office: comp.officeLocation, radius: comp.radiusMeters };
+    }
+  } catch (err) {
+    console.error("Failed to load company geofence:", err);
+  }
+
+  geofenceCache.companyId = companyId;
+  geofenceCache.data = data;
+  if (data) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ office: data.office, radius: data.radius, ts: Date.now() })); } catch { /* ignore */ }
+  }
+  return data;
+};
 
 export const useWorkSession = () => {
   const { user, profile } = useAuthContext();
@@ -172,33 +213,86 @@ export const useWorkSession = () => {
 
   const { captureLocation } = useLocationCapture();
 
+  // ── Realtime presence ─────────────────────────────────────────────────────
+  // Writes a lightweight liveStatus/{uid} doc on every status transition so the
+  // admin panel can subscribe and show Working / Break / Offline instantly.
+  const reportLive = useCallback(async (s: TimerStatus | "offline") => {
+    if (!user || !profile?.companyId) return;
+    try {
+      await setDoc(doc(db, "liveStatus", user.uid), {
+        status: s,
+        companyId: profile.companyId,
+        fullName: profile.fullName,
+        department: profile.department || "",
+        updatedAt: Timestamp.now(),
+      });
+    } catch (err) {
+      console.error("Failed to report live status:", err);
+    }
+  }, [user, profile]);
+
+  // Publish presence on mount if an active session exists, and heartbeat every
+  // 60s while working/break so the admin always sees the current realtime state.
+  useEffect(() => {
+    if ((session?.status === "working" || session?.status === "break") && user) {
+      void reportLive(session.status);
+      const iv = setInterval(() => void reportLive(session.status), 60000);
+      return () => clearInterval(iv);
+    }
+  }, [session?.status, user, reportLive]);
+
+  // Enrich a verified fix with a reverse-geocoded address in the background so
+  // a slow Nominatim call never blocks clock-in.
+  const enrichLocation = useCallback(async (sessionId: string, lat: number, lng: number) => {
+    try {
+      const geo = await reverseGeocode(lat, lng);
+      const fullLoc = {
+        lat,
+        lng,
+        accuracy: 0,
+        label: geo.label,
+        fullAddress: geo.fullAddress,
+        city: geo.city,
+        country: geo.country,
+        capturedAt: new Date().toISOString(),
+      } as ClockInLocation;
+      await updateDoc(
+        doc(db, "users", user.uid, "sessions", sessionId),
+        { clockInLocation: fullLoc, updatedAt: Timestamp.now() } as unknown as Parameters<typeof updateDoc>[1]
+      );
+      setSession(prev =>
+        prev && prev.id === sessionId
+          ? { ...prev, clockInLocation: fullLoc }
+          : prev
+      );
+    } catch (err) {
+      console.error("Failed to enrich location:", err);
+    }
+  }, [user.uid]);
+
   const clockIn = async () => {
     if (!user) return;
 
     try {
-      // Resolve the company's geo-fence (office location + radius) before
-      // allowing the session to start. If it is configured, clock-in is
-      // blocked when the employee is outside the allowed radius.
-      let geofence: { office: OfficeLocation; radius: number } | null = null;
+      // Resolve the company's geo-fence while simultaneously grabbing a fast
+      // geolocation fix — the reads overlap instead of serialising.
+      let geofence: GeofenceInfo | null = null;
+      let coordsPromise: Promise<{ lat: number; lng: number; accuracy: number } | null> = Promise.resolve(null);
+
       if (profile?.companyId) {
-        try {
-          const compSnap = await getDoc(doc(db, "companies", profile.companyId));
-          if (compSnap.exists()) {
-            const comp = compSnap.data() as { officeLocation?: OfficeLocation; radiusMeters?: number };
-            if (comp.officeLocation && comp.radiusMeters) {
-              geofence = { office: comp.officeLocation, radius: comp.radiusMeters };
-            }
-          }
-        } catch (compErr) {
-          console.error("Failed to load company geofence:", compErr);
-        }
+        coordsPromise = getCoords();
+        geofence = await getGeofence(profile.companyId);
       }
 
-      let locationData: LocationData | null = null;
+      let locationData: ClockInLocation | null = null;
       if (geofence) {
         toast.info("Verifying your office location…");
-        const captured = await captureLocation();
-        const dist = distanceMeters(captured.lat, captured.lng, geofence.office.lat, geofence.office.lng);
+        const coords = await coordsPromise;
+        if (!coords) {
+          toast.error("Could not determine your location. Please allow location access and retry.");
+          return false;
+        }
+        const dist = distanceMeters(coords.lat, coords.lng, geofence.office.lat, geofence.office.lng);
         if (dist > geofence.radius) {
           toast.error(
             `You are ${Math.round(dist)}m away from the office. ` +
@@ -206,7 +300,18 @@ export const useWorkSession = () => {
           );
           return false;
         }
-        locationData = { ...captured, distanceMeters: Math.round(dist), inRadius: true };
+        locationData = {
+          lat: coords.lat,
+          lng: coords.lng,
+          accuracy: Math.round(coords.accuracy),
+          label: "",
+          fullAddress: "",
+          city: "",
+          country: "",
+          capturedAt: new Date().toISOString(),
+          distanceMeters: Math.round(dist),
+          inRadius: true,
+        };
       }
 
       const sessionData: Partial<WorkSession> = {
@@ -240,12 +345,13 @@ export const useWorkSession = () => {
       setSession(newSession);
       setBreakLogs([]);
       toast.success("Clocked in!");
+      void reportLive("working");
 
       if (locationData) {
-        // Geo-fenced clock-in: we already have a verified fix — attach it now.
+        // Geo-fenced clock-in: attach the verified fix now, enrich the address lazily.
         try {
           const payload = {
-            clockInLocation: locationData as ClockInLocation,
+            clockInLocation: locationData,
             updatedAt: Timestamp.now(),
           } as unknown as Parameters<typeof updateDoc>[1];
           await updateDoc(doc(db, "users", user.uid, "sessions", newSession.id), payload);
@@ -257,6 +363,7 @@ export const useWorkSession = () => {
         } catch (locErr) {
           console.error("Failed to attach location:", locErr);
         }
+        void enrichLocation(newSession.id, locationData.lat, locationData.lng);
         return true;
       }
 
@@ -342,6 +449,7 @@ export const useWorkSession = () => {
         status: "completed"
       });
 
+      await reportLive("offline");
       await fetchTodaySession();
       stopBreakAlert();
       setIsBreakAlertPlaying(false);
@@ -374,6 +482,7 @@ export const useWorkSession = () => {
       const newBreak = { id: docRef.id, ...breakData };
       setBreakLogs([...breakLogs, newBreak]);
       setSession({ ...session, status: "break" });
+      await reportLive("break");
     } catch (error) {
       console.error("Error starting break:", error);
     }
@@ -419,6 +528,7 @@ export const useWorkSession = () => {
         setSession({ ...session, status: "working", totalBreakDuration: totalBreak });
         stopBreakAlert();
         setIsBreakAlertPlaying(false);
+        await reportLive("working");
       }
     } catch (error) {
       console.error("Error resuming work:", error);

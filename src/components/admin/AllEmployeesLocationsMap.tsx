@@ -133,12 +133,12 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
 
     L.control.zoom({ position: "topright" }).addTo(map);
 
-    // CartoDB Positron — clean professional tiles
+    // OpenStreetMap standard tiles (no API key required)
     L.tileLayer(
-      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       {
         attribution:
-          '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+          '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         maxZoom: 19,
       }
     ).addTo(map);
