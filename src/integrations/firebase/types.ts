@@ -19,6 +19,51 @@ export interface Profile {
   avatarUrl?: string;
   teaPoints: number;
   role: "admin" | "user";
+  companyId?: string;
+  companyName?: string;
+  department?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+// Company document (stored in companies/{companyId})
+export interface OfficeLocation {
+  lat: number;
+  lng: number;
+  label: string;
+  fullAddress?: string;
+  city?: string;
+  country?: string;
+  capturedAt?: string;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  username: string;
+  inviteCode: string;
+  adminUid: string;
+  officeLocation?: OfficeLocation;
+  radiusMeters?: number;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+// Leave request document (stored in leaveRequests/{leaveRequestId})
+export interface LeaveRequest {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeEmail: string;
+  department?: string;
+  companyId?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  adminNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: Timestamp;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -33,6 +78,8 @@ export interface ClockInLocation {
   city: string;
   country: string;
   capturedAt: string; // ISO timestamp when location was captured
+  distanceMeters?: number; // distance from configured office location
+  inRadius?: boolean;      // whether the fix was inside the configured geo-fence
 }
 
 export interface WorkSession {

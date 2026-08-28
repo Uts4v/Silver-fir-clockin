@@ -9,6 +9,8 @@ export interface LocationData {
   city: string;
   country: string;
   capturedAt: string;
+  distanceMeters?: number;
+  inRadius?: boolean;
 }
 
 /**

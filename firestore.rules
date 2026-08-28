@@ -1,60 +1,89 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        myProfile().data.role == 'admin';
+    }
+
+    function sameCompany(companyId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        myProfile().data.companyId == companyId;
+    }
+
+    // ── Companies ────────────────────────────────────────────────
+    match /companies/{companyId} {
+      allow read: if isSignedIn() && (resource.data.adminUid == request.auth.uid || sameCompany(companyId));
+      allow create: if isAdmin();
+      allow update: if isSignedIn() && (resource.data.adminUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ── Users / profiles ─────────────────────────────────────────
     // Allow users to read/write their own profile
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       // Allow admins to read/write all user profiles
-      allow read, write: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read, write: if isAdmin();
     }
 
     // Allow admins to read all users (for listing)
     match /users {
-      allow read: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isAdmin();
     }
 
+    // ── Session documents ────────────────────────────────────────
     // Users can read/write their own sessions
     match /users/{userId}/sessions/{sessionId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       // Allow admins to read all sessions
-      allow read: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isAdmin();
     }
 
     // Admins can read all sessions collections
     match /users/{userId}/sessions {
-      allow read: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isAdmin();
     }
 
     // Users can read/write their own breaks
     match /users/{userId}/sessions/{sessionId}/breaks/{breakId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       // Allow admins to read all breaks
-      allow read: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isAdmin();
     }
 
     // Admins can read all breaks collections
     match /users/{userId}/sessions/{sessionId}/breaks {
-      allow read: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read: if isAdmin();
+    }
+
+    // ── Leave requests ───────────────────────────────────────────
+    match /leaveRequests/{leaveRequestId} {
+      // Employees can read their own requests; admins read all
+      allow read: if isAdmin() ||
+        (request.auth != null && resource.data.employeeId == request.auth.uid);
+      // Employees can create their own requests
+      allow create: if request.auth != null && request.resource.data.employeeId == request.auth.uid;
+      // Only admins can update (approve/reject/notes) or delete
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     // Notes/Announcements
     match /notes/{noteId} {
       // Admins can read/write all notes
-      allow read, write: if request.auth != null &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow read, write: if isAdmin();
       // Users can read/write notes sent to them or to all
       allow read, write: if request.auth != null &&
         (resource.data.recipientId == request.auth.uid || resource.data.recipientId == 'all');

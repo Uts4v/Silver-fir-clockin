@@ -29,8 +29,11 @@ import {
   BarChart3,
   ArrowUpRight,
   ArrowDownRight,
-  Mail,          // ← Added this import (fixes the crash)
-  Briefcase,     // already used but good to keep consistent
+  Mail,
+  Briefcase,
+  Lock,
+  Building2,
+  KeyRound,
 } from "lucide-react";
 
 interface Stats {
@@ -41,13 +44,20 @@ interface Stats {
 }
 
 const Profile = () => {
-  const { user, profile, loading: authLoading, updateProfile, refetchProfile } = useAuthContext();
+  const { user, profile, loading: authLoading, updateProfile, refetchProfile, changePassword } = useAuthContext();
   const navigate = useNavigate();
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [fullName, setFullName] = useState("");
   const [designation, setDesignation] = useState("");
+  const [department, setDepartment] = useState("");
+
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPwd, setChangingPwd] = useState(false);
 
   const [activePeriod, setActivePeriod] = useState<"month" | "30days" | "year">("month");
   const [stats, setStats] = useState<Record<"month" | "30days" | "year", Stats>>({
@@ -67,6 +77,7 @@ const Profile = () => {
     if (profile) {
       setFullName(profile.fullName);
       setDesignation(profile.designation);
+      setDepartment(profile.department || "");
     }
   }, [profile]);
 
@@ -138,16 +149,41 @@ const Profile = () => {
     const { error } = await updateProfile({
       fullName,
       designation,
+      department: department.trim() || undefined,
     });
 
     if (error) {
       toast.error("Failed to update profile");
     } else {
-      toast.success("Profile updated! 🍃");
+      toast.success("Profile updated!");
       setEditing(false);
       refetchProfile();
     }
     setSaving(false);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      toast.error("New passwords don't match");
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast.error("Password must be at least 6 characters");
+      return;
+    }
+    setChangingPwd(true);
+    const { error } = await changePassword(currentPassword, newPassword);
+    if (error) {
+      toast.error(error?.message || "Failed to change password");
+    } else {
+      toast.success("Password changed!");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPwdOpen(false);
+    }
+    setChangingPwd(false);
   };
 
   if (authLoading) {
@@ -236,6 +272,16 @@ const Profile = () => {
                         placeholder="e.g., SEO Specialist, Developer"
                       />
                     </div>
+                    <div>
+                      <Label htmlFor="department">Department</Label>
+                      <Input
+                        id="department"
+                        value={department}
+                        onChange={(e) => setDepartment(e.target.value)}
+                        className="mt-1"
+                        placeholder="e.g., Engineering, HR"
+                      />
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -244,13 +290,25 @@ const Profile = () => {
                     </h1>
                     <div className="flex flex-wrap gap-4 text-muted-foreground">
                       <span className="flex items-center gap-2">
-                        <Mail className="w-4 h-4" />   {/* ← Now works */}
+                        <Mail className="w-4 h-4" />
                         {profile.email}
                       </span>
                       <span className="flex items-center gap-2">
                         <Briefcase className="w-4 h-4" />
                         {profile.designation}
                       </span>
+                      {profile.department && (
+                        <span className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4" />
+                          {profile.department}
+                        </span>
+                      )}
+                      {profile.companyName && (
+                        <span className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4" />
+                          {profile.companyName}
+                        </span>
+                      )}
                     </div>
                   </>
                 )}
@@ -260,7 +318,7 @@ const Profile = () => {
                 <div className="text-center">
                   <div className="flex items-center gap-2 text-accent">
                     <Award className="w-5 h-5" />
-                    <span className="font-display text-2xl font-semibold">{profile.tea_points}</span>
+                    <span className="font-display text-2xl font-semibold">{profile.teaPoints ?? 0}</span>
                   </div>
                   <span className="text-xs text-muted-foreground">Tea Points</span>
                 </div>
@@ -284,6 +342,81 @@ const Profile = () => {
                 )}
               </div>
             </div>
+          </motion.div>
+
+          {/* Change Password */}
+          <motion.div className="tea-card" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-xl font-semibold text-foreground">Change Password</h3>
+                  <p className="text-sm text-muted-foreground">Keep your account secure</p>
+                </div>
+              </div>
+              {!pwdOpen && (
+                <Button variant="outline" onClick={() => setPwdOpen(true)}>
+                  <Lock className="w-4 h-4 mr-2" />
+                  Change Password
+                </Button>
+              )}
+            </div>
+
+            {pwdOpen && (
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div>
+                  <Label htmlFor="current-password">Current Password</Label>
+                  <Input
+                    id="current-password"
+                    type="password"
+                    required
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="mt-1"
+                    placeholder="Enter your current password"
+                  />
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="new-password">New Password</Label>
+                    <Input
+                      id="new-password"
+                      type="password"
+                      required
+                      minLength={6}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="mt-1"
+                      placeholder="At least 6 characters"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="confirm-password">Confirm New Password</Label>
+                    <Input
+                      id="confirm-password"
+                      type="password"
+                      required
+                      minLength={6}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="mt-1"
+                      placeholder="Repeat new password"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="submit" disabled={changingPwd} className="tea-button-primary">
+                    {changingPwd ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Lock className="w-4 h-4 mr-2" />}
+                    Update Password
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={() => { setPwdOpen(false); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); }}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            )}
           </motion.div>
 
           {/* Monthly Overview (always current month) */}

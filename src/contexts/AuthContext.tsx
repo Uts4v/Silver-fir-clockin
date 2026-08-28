@@ -1,16 +1,25 @@
 import { createContext, useContext, ReactNode } from "react";
-import { useAuth, Profile } from "@/hooks/useAuth";
+import {
+  useAuth,
+  Profile,
+  RegisterCompanyInput,
+  JoinCompanyInput,
+} from "@/hooks/useAuth";
 import type { User as FirebaseUser } from "firebase/auth";
+
+type AuthResult = { data?: unknown; error?: unknown };
 
 interface AuthContextType {
   user: FirebaseUser | null;
   session: null; // Firebase doesn't have sessions like Supabase
   profile: Profile | null;
   loading: boolean;
-  signUp: (email: string, password: string, fullName: string) => Promise<any>;
-  signIn: (email: string, password: string) => Promise<any>;
-  signOut: () => Promise<any>;
-  updateProfile: (updates: Partial<Profile>) => Promise<any>;
+  registerCompany: (input: RegisterCompanyInput) => Promise<AuthResult>;
+  signUp: (input: JoinCompanyInput) => Promise<AuthResult>;
+  signIn: (email: string, password: string) => Promise<AuthResult>;
+  signOut: () => Promise<AuthResult>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<AuthResult>;
+  updateProfile: (updates: Partial<Profile>) => Promise<AuthResult>;
   refetchProfile: () => void;
 }
 

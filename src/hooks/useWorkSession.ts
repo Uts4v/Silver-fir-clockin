@@ -17,12 +17,13 @@ import {
 } from "firebase/firestore";
 import { db } from "@/integrations/firebase/client";
 import { useAuthContext } from "@/contexts/AuthContext";
-import type { TimerStatus, WorkSession, BreakLog, ClockInLocation } from "@/integrations/firebase/types";
+import type { TimerStatus, WorkSession, BreakLog, ClockInLocation, OfficeLocation } from "@/integrations/firebase/types";
 import { toast } from "sonner";
-import { useLocationCapture } from "@/hooks/useLocation";  // new hook for geolocation
+import { useLocationCapture, LocationData } from "@/hooks/useLocation";  // new hook for geolocation
+import { distanceMeters } from "@/lib/geo";
 
 export const useWorkSession = () => {
-  const { user } = useAuthContext();
+  const { user, profile } = useAuthContext();
   const [session, setSession] = useState<WorkSession | null>(null);
   const [breakLogs, setBreakLogs] = useState<BreakLog[]>([]);
   const [displayTime, setDisplayTime] = useState(0);
@@ -175,8 +176,39 @@ export const useWorkSession = () => {
     if (!user) return;
 
     try {
-      // Clock in immediately so the timer/UI starts without waiting on
-      // geolocation or reverse-geocoding (which can take seconds).
+      // Resolve the company's geo-fence (office location + radius) before
+      // allowing the session to start. If it is configured, clock-in is
+      // blocked when the employee is outside the allowed radius.
+      let geofence: { office: OfficeLocation; radius: number } | null = null;
+      if (profile?.companyId) {
+        try {
+          const compSnap = await getDoc(doc(db, "companies", profile.companyId));
+          if (compSnap.exists()) {
+            const comp = compSnap.data() as { officeLocation?: OfficeLocation; radiusMeters?: number };
+            if (comp.officeLocation && comp.radiusMeters) {
+              geofence = { office: comp.officeLocation, radius: comp.radiusMeters };
+            }
+          }
+        } catch (compErr) {
+          console.error("Failed to load company geofence:", compErr);
+        }
+      }
+
+      let locationData: LocationData | null = null;
+      if (geofence) {
+        toast.info("Verifying your office location…");
+        const captured = await captureLocation();
+        const dist = distanceMeters(captured.lat, captured.lng, geofence.office.lat, geofence.office.lng);
+        if (dist > geofence.radius) {
+          toast.error(
+            `You are ${Math.round(dist)}m away from the office. ` +
+            `Clock-in is only allowed within ${geofence.radius}m.`
+          );
+          return false;
+        }
+        locationData = { ...captured, distanceMeters: Math.round(dist), inRadius: true };
+      }
+
       const sessionData: Partial<WorkSession> = {
         userId: user.uid,
         date: today,
@@ -209,11 +241,9 @@ export const useWorkSession = () => {
       setBreakLogs([]);
       toast.success("Clocked in!");
 
-      // Capture location in the background and attach it once ready —
-      // a slow/failed fix never blocks clock-in again.
-      captureLocation()
-        .then(async (locationData) => {
-          if (!locationData) return;
+      if (locationData) {
+        // Geo-fenced clock-in: we already have a verified fix — attach it now.
+        try {
           const payload = {
             clockInLocation: locationData as ClockInLocation,
             updatedAt: Timestamp.now(),
@@ -222,6 +252,27 @@ export const useWorkSession = () => {
           setSession(prev =>
             prev && prev.id === newSession.id
               ? { ...prev, clockInLocation: locationData as ClockInLocation }
+              : prev
+          );
+        } catch (locErr) {
+          console.error("Failed to attach location:", locErr);
+        }
+        return true;
+      }
+
+      // No geo-fence configured: capture location in the background and attach
+      // it once ready — a slow/failed fix never blocks clock-in.
+      captureLocation()
+        .then(async (captured) => {
+          if (!captured) return;
+          const payload = {
+            clockInLocation: captured as ClockInLocation,
+            updatedAt: Timestamp.now(),
+          } as unknown as Parameters<typeof updateDoc>[1];
+          await updateDoc(doc(db, "users", user.uid, "sessions", newSession.id), payload);
+          setSession(prev =>
+            prev && prev.id === newSession.id
+              ? { ...prev, clockInLocation: captured as ClockInLocation }
               : prev
           );
         })
@@ -233,9 +284,15 @@ export const useWorkSession = () => {
               : "Could not capture your location."
           );
         });
+      return true;
     } catch (error) {
       console.error("Error clocking in:", error);
-      toast.error("Failed to clock in. Please try again.");
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to clock in. Please try again."
+      );
+      return false;
     }
   };
 

@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { useNavigate, useLocation } from "react-router-dom";
 import logo from "@/img/danfe.png";
-import { User, Settings, LogOut, Loader2, Shield, Mail } from "lucide-react";
+import { User, Settings, LogOut, Loader2, Shield, Mail, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/contexts/AuthContext";
 import {
@@ -75,6 +75,7 @@ export const Header = () => {
     { label: "Dashboard", path: "/" },
     { label: "Profile", path: "/profile" },
     { label: "History", path: "/history" },
+    { label: "Leave", path: "/leaves", icon: CalendarDays },
     { 
       label: "Notes", 
       path: "/notes", 
@@ -99,7 +100,7 @@ export const Header = () => {
           </div>
           <div className="flex flex-col">
             <span className="font-display text-xl font-semibold text-foreground">
-              POG 
+              Silver Fir
             </span>
           </div>
         </motion.div>
@@ -178,6 +179,10 @@ export const Header = () => {
                 <DropdownMenuItem onClick={() => navigate("/history")}>
                   <Settings className="w-4 h-4 mr-2" />
                   History
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/leaves")}>
+                  <CalendarDays className="w-4 h-4 mr-2" />
+                  Leave
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => navigate("/notes")}>
                   <Mail className="w-4 h-4 mr-2" />

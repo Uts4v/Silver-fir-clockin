@@ -16,6 +16,7 @@ import Auth from "./pages/Auth";
 import Profile from "./pages/Profile";
 import History from "./pages/History";
 import Admin from "./pages/Admin";
+import LeaveRequests from "./pages/LeaveRequests";
 import NotFound from "./pages/NotFound";
 import NotesSubscriptionsManager from "./pages/NotesSubscriptionsManager";
 
@@ -35,6 +36,7 @@ const App = () => (
               <Route path="/auth" element={<Auth />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/history" element={<History />} />
+              <Route path="/leaves" element={<LeaveRequests />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

@@ -4,23 +4,27 @@
  * No part of this code may be copied, reproduced, or distributed without
  * express written permission.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuthContext } from "@/contexts/AuthContext";
-import { db } from "@/integrations/firebase/client";
+import { db, auth } from "@/integrations/firebase/client";
 import { formatTimeShort } from "@/hooks/useWorkSession";
+import { useLocationCapture } from "@/hooks/useLocation";
 import { toast } from "sonner";
+import { createUserWithEmailAndPassword } from "firebase/auth";
 import {
-  collection, doc, deleteDoc, getDocs, onSnapshot, Timestamp,
-  updateDoc, query, orderBy, limit, where,
+  collection, doc, deleteDoc, getDocs, getDoc, onSnapshot, Timestamp,
+  updateDoc, setDoc, query, orderBy, limit, where,
 } from "firebase/firestore";
-import { Profile } from "@/integrations/firebase/types";
+import { Profile, Company } from "@/integrations/firebase/types";
 import AdminLocationView from "@/components/admin/AdminLocationView";
 import EmployeeLocationsMap from "@/components/admin/EmployeeLocationsMap";
 import AllEmployeesLocationsMap from "@/components/admin/AllEmployeesLocationsMap";
 import AttendanceCalendar from "@/components/admin/Attendencecalendar";
 import TeamAttendance from "@/components/admin/TeamAttendance";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -31,7 +35,8 @@ import {
   Calendar, DollarSign, BarChart3, Clock, Coffee, Target,
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
   Activity, Zap, Award, LayoutDashboard, CreditCard,
-  Map as MapIcon,
+  Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
+  Building2, KeyRound, Check,
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -153,16 +158,39 @@ const Admin = () => {
   const [loading,       setLoading]       = useState(true);
   const [searchQuery,   setSearchQuery]   = useState("");
   const [error,         setError]         = useState<string|null>(null);
-  const [section, setSection] = useState<"overview"|"team"|"analytics"|"locations"|"subscriptions"|"attendance">("overview");
+  const [section, setSection] = useState<"overview"|"team"|"attendance"|"analytics"|"locations"|"subscriptions"|"settings">("overview");
   const [selEmp,        setSelEmp]        = useState<UserWithStats|null>(null);
   const [empOpen,       setEmpOpen]       = useState(false);
   const [empLoading,    setEmpLoading]    = useState(false);
+  const [deptFilter,    setDeptFilter]    = useState<string>("all");
+
+  // Company + settings
+  const [company,        setCompany]       = useState<Company|null>(null);
+  const [officeLat,      setOfficeLat]     = useState("");
+  const [officeLng,      setOfficeLng]     = useState("");
+  const [officeLabel,    setOfficeLabel]   = useState("");
+  const [radiusMeters,   setRadiusMeters]  = useState("");
+  const [locLoading,     setLocLoading]    = useState(false);
+  const [savingSettings, setSavingSettings]= useState(false);
+
+  // Create-employee form
+  const [empFormOpen,    setEmpFormOpen]   = useState(false);
+  const [empName,        setEmpName]       = useState("");
+  const [empEmail,       setEmpEmail]      = useState("");
+  const [empPassword,    setEmpPassword]   = useState("");
+  const [empDepartment,  setEmpDepartment] = useState("");
+  const [creatingEmp,    setCreatingEmp]   = useState(false);
+
+  const { captureLocation } = useLocationCapture();
 
   const filtered = users.filter(u =>
-    u.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    u.department?.toLowerCase().includes(searchQuery.toLowerCase())
+    (deptFilter === "all" || u.department === deptFilter) &&
+    (u.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+     u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+     u.department?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const departments = Array.from(new Set(users.map(u=>u.department).filter(Boolean))).sort();
 
   // Live employee data for the detail modal, refreshed by the fetchUsers poll.
   const liveEmp = users.find(u => u.id === selEmp?.id) ?? selEmp;
@@ -205,9 +233,12 @@ const Admin = () => {
       const ago7s  = ago7.toISOString().split("T")[0];
 
       const uSnap = await getDocs(collection(db,"users"));
-      if (uSnap.empty) { setUsers([]); setLoading(false); return; }
+      const myUsers = profile?.companyId
+        ? uSnap.docs.filter(d => (d.data() as {companyId?:string}).companyId === profile.companyId)
+        : uSnap.docs;
+      if (myUsers.length===0) { setUsers([]); setLoading(false); return; }
 
-      const result = await Promise.all(uSnap.docs.map(async ud => {
+      const result = await Promise.all(myUsers.map(async ud => {
         const usr = {id:ud.id,...ud.data()} as Profile;
         let tw=0,tb=0,mw=0,mb=0,st="idle",active=false;
         let l30w=0,l30b=0,l30s=0,ms=0;
@@ -265,6 +296,97 @@ const Admin = () => {
       setLoading(false);
     }
   },[user,profile]);
+
+  const fetchCompany = useCallback(async () => {
+    if (!profile?.companyId) return;
+    try {
+      const snap = await getDoc(doc(db,"companies",profile.companyId));
+      if (snap.exists()) {
+        const c = {id:snap.id,...snap.data()} as Company;
+        setCompany(c);
+        if (c.officeLocation) {
+          setOfficeLat(String(c.officeLocation.lat));
+          setOfficeLng(String(c.officeLocation.lng));
+          setOfficeLabel(c.officeLocation.label || "");
+        }
+        setRadiusMeters(c.radiusMeters ? String(c.radiusMeters) : "");
+      }
+    } catch (err) {
+      console.error("Failed to load company:", err);
+    }
+  },[profile?.companyId]);
+
+  useEffect(()=>{ if(!authLoading&&profile?.role==="admin") fetchCompany(); },[authLoading,profile,fetchCompany]);
+
+  const useMyLocation = async () => {
+    setLocLoading(true);
+    try {
+      const cap = await captureLocation();
+      setOfficeLat(String(cap.lat));
+      setOfficeLng(String(cap.lng));
+      setOfficeLabel(cap.label);
+      toast.success("Office location set to your current position");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to get your location");
+    } finally {
+      setLocLoading(false);
+    }
+  };
+
+  const saveCompanySettings = async () => {
+    if (!company) return;
+    const lat = parseFloat(officeLat);
+    const lng = parseFloat(officeLng);
+    const radius = parseInt(radiusMeters, 10);
+    if (isNaN(lat) || isNaN(lng)) { toast.error("Enter a valid office latitude and longitude"); return; }
+    if (isNaN(radius) || radius <= 0) { toast.error("Enter a valid radius in meters"); return; }
+    setSavingSettings(true);
+    try {
+      await updateDoc(doc(db,"companies",company.id), {
+        officeLocation: { lat, lng, label: officeLabel || "Office", capturedAt: new Date().toISOString() },
+        radiusMeters: radius,
+        updatedAt: Timestamp.now(),
+      });
+      setCompany(prev => prev ? { ...prev, officeLocation: { lat, lng, label: officeLabel || "Office", capturedAt: new Date().toISOString() }, radiusMeters: radius } : prev);
+      toast.success("Office location & radius saved. Clock-in is now geo-fenced.");
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      toast.error("Failed to save settings");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const createEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!company) { toast.error("Company not loaded"); return; }
+    setCreatingEmp(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, empEmail, empPassword);
+      await setDoc(doc(db,"users",cred.user.uid), {
+        id: cred.user.uid,
+        userId: cred.user.uid,
+        fullName: empName.trim(),
+        email: empEmail,
+        designation: "Employee",
+        teaPoints: 0,
+        role: "user",
+        companyId: company.id,
+        companyName: company.name,
+        department: empDepartment.trim() || undefined,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
+      toast.success(`Employee "${empName}" created`);
+      setEmpFormOpen(false);
+      setEmpName(""); setEmpEmail(""); setEmpPassword(""); setEmpDepartment("");
+      fetchUsers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create employee");
+    } finally {
+      setCreatingEmp(false);
+    }
+  };
 
   useEffect(()=>{ if(!authLoading&&profile?.role==="admin") fetchUsers(); },[authLoading,profile,fetchUsers]);
   useEffect(()=>{
@@ -385,7 +507,89 @@ const Admin = () => {
     {id:"analytics",     label:"Analytics",     icon:BarChart3},
     {id:"locations",     label:"Locations",     icon:MapIcon},
     {id:"subscriptions", label:"Subscriptions", icon:CreditCard},
+    {id:"settings",      label:"Settings",      icon:SettingsIcon},
   ] as const;
+
+  const renderRow = (u: UserWithStats, idx: number) => {
+    const sc = statusCfg(u.currentStatus);
+    return (
+      <motion.div key={u.id} initial={{opacity:0,x:-5}} animate={{opacity:1,x:0}} transition={{delay:idx*0.025}}
+        className="pr grid px-5 py-3.5 border-b border-white/[0.04] last:border-0 group items-center transition-colors"
+        style={{gridTemplateColumns:"2.2fr 1fr 1.1fr 1.3fr 1fr 0.75fr 0.2fr 0.9fr"}}>
+
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Avi name={u.fullName} sz="sm"/>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-white truncate">{u.fullName||"—"}</p>
+            <p className="text-[10px] text-white/22 truncate">{u.email} · {u.department||"—"}</p>
+          </div>
+        </div>
+
+        <div>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold"
+            style={{background:sc.bg,color:sc.tx}}>
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+              style={{background:sc.dot,boxShadow:u.currentStatus==="working"?`0 0 4px ${sc.dot}`:"none"}}/>
+            {sc.label}
+          </span>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-white">{formatTime(u.todayWorkTime)}</p>
+          <p className="text-[9px] text-white/20">brk {formatTime(u.todayBreakTime)}</p>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-white">{formatTime(u.monthWorkTime)}</p>
+          <p className="text-[9px] text-white/20">brk {formatTime(u.monthBreakTime)}</p>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <div className="w-14 h-1 rounded-full overflow-hidden" style={{background:"rgba(255,255,255,0.06)"}}>
+            <div className="h-full rounded-full" style={{width:`${u.focusRate}%`,background:focusColor(u.focusRate)}}/>
+          </div>
+          <span className="text-xs font-bold" style={{color:focusColor(u.focusRate)}}>{u.focusRate.toFixed(0)}%</span>
+        </div>
+
+        <div>
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
+            style={{background:u.role==="admin"?"rgba(129,140,248,0.13)":"rgba(255,255,255,0.05)",color:u.role==="admin"?"#818cf8":"rgba(255,255,255,0.28)"}}>
+            {u.role==="admin"?"Admin":"Member"}
+          </span>
+        </div>
+
+        <div/>
+
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
+          <button onClick={()=>openEmp(u)} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-emerald-500/15 transition-colors" title="View">
+            <Eye className="w-3.5 h-3.5 text-emerald-400"/>
+          </button>
+          <button onClick={()=>toggleRole(u.id,u.role||"user")} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-indigo-500/15 transition-colors">
+            {u.role==="admin"?<ShieldCheck className="w-3.5 h-3.5 text-indigo-400"/>:<Shield className="w-3.5 h-3.5 text-white/22"/>}
+          </button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-rose-500/15 transition-colors">
+                <Trash2 className="w-3.5 h-3.5 text-rose-400/50 group-hover:text-rose-400 transition-colors"/>
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="rounded-2xl border border-white/10" style={{background:"#0d0f18"}}>
+              <AlertDialogHeader>
+                <AlertDialogTitle className="text-white">Delete Employee?</AlertDialogTitle>
+                <AlertDialogDescription className="text-white/35">
+                  Permanently delete <strong className="text-white/65">{u.fullName||u.email}</strong> and all their data.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="border-white/10 text-white/55 rounded-xl" style={{background:"rgba(255,255,255,0.04)"}}>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={()=>removeUser(u.id)} className="bg-rose-600 hover:bg-rose-700 rounded-xl">Delete</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </motion.div>
+    );
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -407,9 +611,9 @@ const Admin = () => {
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3.5">
             <div>
-              <h1 className="ph text-lg font-bold text-white leading-none">POG Admin</h1>
+              <h1 className="ph text-lg font-bold text-white leading-none">Silver Fir Admin</h1>
               <p className="text-[9px] text-white/20 mt-0.5">
-                {new Date().toLocaleDateString("en-US",{weekday:"short",month:"long",day:"numeric",year:"numeric"})}
+                {company?.name || ""}{company?.name ? " · " : ""}{new Date().toLocaleDateString("en-US",{weekday:"short",month:"long",day:"numeric",year:"numeric"})}
               </p>
             </div>
           </div>
@@ -566,7 +770,7 @@ const Admin = () => {
           {/* ══════════════ TEAM ══════════════ */}
           {section==="team" && (
             <motion.div key="tm" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0}} transition={{duration:0.17}}>
-              <div className="flex items-center gap-3 mb-5">
+              <div className="flex flex-wrap items-center gap-3 mb-5">
                 <div className="relative flex-1 max-w-xs">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20"/>
                   <input type="text" placeholder="Search employees…" value={searchQuery}
@@ -574,6 +778,22 @@ const Admin = () => {
                     className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm text-white bg-transparent pg focus:outline-none focus:ring-1 focus:ring-indigo-500/30 placeholder-white/15"/>
                 </div>
                 <span className="text-xs text-white/15">{filtered.length} results</span>
+                <Button onClick={()=>setEmpFormOpen(true)} size="sm"
+                  className="ml-auto flex items-center gap-1.5 text-xs rounded-xl" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
+                  <UserPlus className="w-3.5 h-3.5"/> Add Employee
+                </Button>
+              </div>
+
+              {/* Department filter */}
+              <div className="flex items-center gap-1.5 mb-5 flex-wrap">
+                {["all",...departments].map(d=>(
+                  <button key={d} onClick={()=>setDeptFilter(d)}
+                    className={`px-3 py-1 rounded-lg text-[10px] font-semibold transition-all border ${
+                      deptFilter===d ? "border-indigo-500/30 text-indigo-300" : "border-transparent text-white/25 hover:text-white/55"}`}
+                    style={deptFilter===d?{background:"rgba(99,102,241,0.13)"}:{}}>
+                    {d==="all"?"All Departments":d}
+                  </button>
+                ))}
               </div>
 
               <div className="pg rounded-2xl overflow-hidden">
@@ -592,86 +812,21 @@ const Admin = () => {
                   </div>
                 ) : filtered.length===0 ? (
                   <div className="py-14 text-center text-white/18 text-sm">No employees found</div>
-                ) : filtered.map((u,idx)=>{
-                  const sc=statusCfg(u.currentStatus);
-                  return (
-                    <motion.div key={u.id} initial={{opacity:0,x:-5}} animate={{opacity:1,x:0}} transition={{delay:idx*0.025}}
-                      className="pr grid px-5 py-3.5 border-b border-white/[0.04] last:border-0 group items-center transition-colors"
-                      style={{gridTemplateColumns:"2.2fr 1fr 1.1fr 1.3fr 1fr 0.75fr 0.2fr 0.9fr"}}>
-
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Avi name={u.fullName} sz="sm"/>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-white truncate">{u.fullName||"—"}</p>
-                          <p className="text-[10px] text-white/22 truncate">{u.email}</p>
-                        </div>
+                ) : (()=>{
+                  const grouped = [
+                    ...departments.map(d=>{const items=filtered.filter(u=>u.department===d);return {label:d,items};}).filter(g=>g.items.length>0),
+                    ...(filtered.some(u=>!u.department)?[{label:"Unassigned",items:filtered.filter(u=>!u.department)}]:[]),
+                  ];
+                  return grouped.map(g=>(
+                    <div key={g.label}>
+                      <div className="px-5 py-2 flex items-center gap-2 bg-white/[0.02] border-b border-white/[0.04]">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-indigo-300/70">{g.label}</span>
+                        <span className="text-[9px] text-white/15">{g.items.length}</span>
                       </div>
-
-                      <div>
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-semibold"
-                          style={{background:sc.bg,color:sc.tx}}>
-                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{background:sc.dot,boxShadow:u.currentStatus==="working"?`0 0 4px ${sc.dot}`:"none"}}/>
-                          {sc.label}
-                        </span>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-medium text-white">{formatTime(u.todayWorkTime)}</p>
-                        <p className="text-[9px] text-white/20">brk {formatTime(u.todayBreakTime)}</p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-medium text-white">{formatTime(u.monthWorkTime)}</p>
-                        <p className="text-[9px] text-white/20">brk {formatTime(u.monthBreakTime)}</p>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-14 h-1 rounded-full overflow-hidden" style={{background:"rgba(255,255,255,0.06)"}}>
-                          <div className="h-full rounded-full" style={{width:`${u.focusRate}%`,background:focusColor(u.focusRate)}}/>
-                        </div>
-                        <span className="text-xs font-bold" style={{color:focusColor(u.focusRate)}}>{u.focusRate.toFixed(0)}%</span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
-                          style={{background:u.role==="admin"?"rgba(129,140,248,0.13)":"rgba(255,255,255,0.05)",color:u.role==="admin"?"#818cf8":"rgba(255,255,255,0.28)"}}>
-                          {u.role==="admin"?"Admin":"Member"}
-                        </span>
-                      </div>
-
-                      <div/>
-
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
-                        <button onClick={()=>openEmp(u)} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-emerald-500/15 transition-colors" title="View">
-                          <Eye className="w-3.5 h-3.5 text-emerald-400"/>
-                        </button>
-                        <button onClick={()=>toggleRole(u.id,u.role||"user")} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-indigo-500/15 transition-colors">
-                          {u.role==="admin"?<ShieldCheck className="w-3.5 h-3.5 text-indigo-400"/>:<Shield className="w-3.5 h-3.5 text-white/22"/>}
-                        </button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <button className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-rose-500/15 transition-colors">
-                              <Trash2 className="w-3.5 h-3.5 text-rose-400/50 group-hover:text-rose-400 transition-colors"/>
-                            </button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent className="rounded-2xl border border-white/10" style={{background:"#0d0f18"}}>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle className="text-white">Delete Employee?</AlertDialogTitle>
-                              <AlertDialogDescription className="text-white/35">
-                                Permanently delete <strong className="text-white/65">{u.fullName||u.email}</strong> and all their data.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel className="border-white/10 text-white/55 rounded-xl" style={{background:"rgba(255,255,255,0.04)"}}>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={()=>removeUser(u.id)} className="bg-rose-600 hover:bg-rose-700 rounded-xl">Delete</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                      {g.items.map((u,idx)=>renderRow(u,idx))}
+                    </div>
+                  ));
+                })()}
               </div>
             </motion.div>
           )}
@@ -904,6 +1059,99 @@ const Admin = () => {
               )}
             </motion.div>
           )}
+
+          {/* ══════════════ SETTINGS ══════════════ */}
+          {section==="settings" && (
+            <motion.div key="st" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0}} transition={{duration:0.17}} className="space-y-4">
+
+              {/* Company info */}
+              <div className="pg rounded-2xl p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(99,102,241,0.12)"}}>
+                    <Building2 className="w-4 h-4 text-indigo-400"/>
+                  </div>
+                  <div>
+                    <h3 className="ph text-sm font-semibold text-white">Company</h3>
+                    <p className="text-[9px] text-white/20 mt-0.5">Your organization profile</p>
+                  </div>
+                </div>
+                {company ? (
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    <div className="rounded-xl p-4" style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.05)"}}>
+                      <p className="text-[9px] text-white/20 uppercase tracking-widest">Name</p>
+                      <p className="text-sm font-semibold text-white mt-1">{company.name}</p>
+                    </div>
+                    <div className="rounded-xl p-4" style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.05)"}}>
+                      <p className="text-[9px] text-white/20 uppercase tracking-widest">Username</p>
+                      <p className="text-sm font-semibold text-white mt-1 font-mono">{company.username}</p>
+                    </div>
+                    <div className="rounded-xl p-4" style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.05)"}}>
+                      <p className="text-[9px] text-white/20 uppercase tracking-widest inline-flex items-center gap-1"><KeyRound className="w-3 h-3"/> Invite Code</p>
+                      <p className="text-sm font-semibold text-white mt-1 font-mono">{company.inviteCode}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-white/25">Company not loaded.</p>
+                )}
+                <p className="text-[10px] text-white/18 mt-3">Employees sign up using your company username or invite code.</p>
+              </div>
+
+              {/* Geo-fence config */}
+              <div className="pg rounded-2xl p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(52,211,153,0.11)"}}>
+                    <MapPin className="w-4 h-4 text-emerald-400"/>
+                  </div>
+                  <div>
+                    <h3 className="ph text-sm font-semibold text-white">Geo-Fenced Clock-In</h3>
+                    <p className="text-[9px] text-white/20 mt-0.5">Employees can only clock in within this radius of the office</p>
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3 mb-4">
+                  <div>
+                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Latitude</Label>
+                    <Input value={officeLat} onChange={e=>setOfficeLat(e.target.value)} placeholder="27.7172"
+                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Longitude</Label>
+                    <Input value={officeLng} onChange={e=>setOfficeLng(e.target.value)} placeholder="85.3240"
+                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Label</Label>
+                    <Input value={officeLabel} onChange={e=>setOfficeLabel(e.target.value)} placeholder="Head Office"
+                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Allowed Radius (meters)</Label>
+                    <Input value={radiusMeters} onChange={e=>setRadiusMeters(e.target.value)} placeholder="e.g. 300"
+                      type="number" min={1}
+                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+                  </div>
+                  <div className="flex items-end">
+                    <Button type="button" onClick={useMyLocation} disabled={locLoading} variant="outline"
+                      className="w-full rounded-xl text-xs border-white/10 text-white/55 hover:text-white">
+                      {locLoading ? "Locating…" : "Use my current location"}
+                    </Button>
+                  </div>
+                </div>
+
+                {company?.officeLocation && (
+                  <div className="text-[10px] text-white/25 mb-4">
+                    Current office: {company.officeLocation.label}{company.radiusMeters ? ` · ${company.radiusMeters}m radius` : ""}
+                  </div>
+                )}
+
+                <Button type="button" onClick={saveCompanySettings} disabled={savingSettings}
+                  className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
+                  {savingSettings ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Save className="w-3.5 h-3.5"/>}
+                  Save Settings
+                </Button>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
 
@@ -1123,6 +1371,56 @@ const Admin = () => {
               </Tabs>
             ) : null}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══════════════ CREATE EMPLOYEE MODAL ══════════════ */}
+      <Dialog open={empFormOpen} onOpenChange={setEmpFormOpen}>
+        <DialogContent className="max-w-md rounded-3xl border border-white/10" style={{background:"#0a0c14"}}>
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(129,140,248,0.13)"}}>
+              <UserPlus className="w-4 h-4 text-indigo-400"/>
+            </div>
+            <div>
+              <h3 className="ph font-bold text-white text-sm">Add Employee</h3>
+              <p className="text-[9px] text-white/25 mt-0.5">Create an account for a new {company?.name || "company"} employee</p>
+            </div>
+          </div>
+
+          <form onSubmit={createEmployee} className="space-y-3.5">
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Full Name</Label>
+              <Input required value={empName} onChange={e=>setEmpName(e.target.value)} placeholder="Employee name"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+            </div>
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Email</Label>
+              <Input required type="email" value={empEmail} onChange={e=>setEmpEmail(e.target.value)} placeholder="employee@example.com"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+            </div>
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Temporary Password</Label>
+              <Input required type="text" value={empPassword} onChange={e=>setEmpPassword(e.target.value)} placeholder="min 6 characters"
+                minLength={6} className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+            </div>
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Department</Label>
+              <Input value={empDepartment} onChange={e=>setEmpDepartment(e.target.value)} placeholder="e.g. Engineering, HR"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+            </div>
+
+            <div className="flex items-center gap-2 justify-end pt-2">
+              <Button type="button" variant="outline" onClick={()=>setEmpFormOpen(false)}
+                className="rounded-xl text-xs border-white/10 text-white/45">
+                Cancel
+              </Button>
+              <Button type="submit" disabled={creatingEmp}
+                className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
+                {creatingEmp ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Check className="w-3.5 h-3.5"/>}
+                Create Employee
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

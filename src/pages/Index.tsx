@@ -188,7 +188,7 @@ const Index = () => {
               <div className="w-5 h-5 text-primary">
                 <TeaLeafIcon />
               </div>
-              <span>Proof of Grind</span>
+              <span>Silver Fir</span>
             </div>
             <p>© 2026 Utsav Shrestha. All rights reserved.</p>
               <p>Brew productivity, one cup at a time.</p>
