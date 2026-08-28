@@ -20,6 +20,7 @@ import {
   Building2,
   Users,
   KeyRound,
+  type LucideIcon,
 } from "lucide-react";
 
 type Mode = "login" | "company" | "employee";
@@ -519,9 +520,9 @@ const Field = ({
   </div>
 );
 
-const FieldIcon = ({ icon: Icon, children }: { icon: React.ReactNode; children: React.ReactNode }) => (
+const FieldIcon = ({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) => (
   <div className="flex items-center gap-1.5">
-    {Icon}
+    <Icon className="w-4 h-4 text-muted-foreground" />
     {children}
   </div>
 );
