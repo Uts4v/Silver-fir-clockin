@@ -144,7 +144,7 @@ export const useAuth = () => {
         teaPoints: 0,
         role: "admin",
         companyName,
-        department: input.department?.trim() || undefined,
+        ...(input.department?.trim() ? { department: input.department.trim() } : {}),
         createdAt: serverTimestamp() as Timestamp,
         updatedAt: serverTimestamp() as Timestamp,
       };
@@ -193,7 +193,7 @@ export const useAuth = () => {
         role: "user",
         companyId: company.id,
         companyName: company.name,
-        department: input.department?.trim() || undefined,
+        ...(input.department?.trim() ? { department: input.department.trim() } : {}),
         createdAt: serverTimestamp() as Timestamp,
         updatedAt: serverTimestamp() as Timestamp,
       };
@@ -243,8 +243,14 @@ export const useAuth = () => {
     if (!user) return { error: new Error("No user logged in") };
 
     try {
+      const clean: Partial<Profile> = {};
+      (Object.keys(updates) as (keyof Profile)[]).forEach((k) => {
+        const v = updates[k];
+        if (v !== undefined) (clean as Record<string, unknown>)[k] = v;
+      });
+
       const updateData: Partial<Profile> = {
-        ...updates,
+        ...clean,
         updatedAt: serverTimestamp() as Timestamp,
       };
 
@@ -253,10 +259,10 @@ export const useAuth = () => {
       // Update local state
       const currentProfile = profile;
       if (currentProfile) {
-        setProfile({ ...currentProfile, ...updates });
+        setProfile({ ...currentProfile, ...clean });
       }
 
-      return { data: { ...profile, ...updates }, error: null };
+      return { data: { ...profile, ...clean }, error: null };
     } catch (error) {
       return { data: null, error };
     }

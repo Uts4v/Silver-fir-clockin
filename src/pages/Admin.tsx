@@ -373,7 +373,7 @@ const Admin = () => {
         role: "user",
         companyId: company.id,
         companyName: company.name,
-        department: empDepartment.trim() || undefined,
+        ...(empDepartment.trim() ? { department: empDepartment.trim() } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       });
