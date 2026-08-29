@@ -253,6 +253,8 @@ export const useWorkSession = () => {
   // Enrich a verified fix with a reverse-geocoded address in the background so
   // a slow Nominatim call never blocks clock-in.
   const enrichLocation = useCallback(async (sessionId: string, lat: number, lng: number) => {
+    if (!user) return;
+    const uid = user.uid;
     try {
       const geo = await reverseGeocode(lat, lng);
       const fullLoc = {
@@ -266,7 +268,7 @@ export const useWorkSession = () => {
         capturedAt: new Date().toISOString(),
       } as ClockInLocation;
       await updateDoc(
-        doc(db, "users", user.uid, "sessions", sessionId),
+        doc(db, "users", uid, "sessions", sessionId),
         { clockInLocation: fullLoc, updatedAt: Timestamp.now() } as unknown as Parameters<typeof updateDoc>[1]
       );
       setSession(prev =>
@@ -277,7 +279,7 @@ export const useWorkSession = () => {
     } catch (err) {
       console.error("Failed to enrich location:", err);
     }
-  }, [user.uid]);
+  }, [user]);
 
   const clockIn = async () => {
     if (!user) return;
