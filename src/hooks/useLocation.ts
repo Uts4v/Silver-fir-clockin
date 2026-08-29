@@ -63,7 +63,7 @@ export async function reverseGeocode(
     const res = await fetch(url, {
       headers: {
         // Nominatim requires a User-Agent identifying your app
-        "User-Agent": "TeaBreakTracker/1.0 (https://github.com/your-repo)"
+        "User-Agent": "SilverFirClockIn/1.0 (com.silverfir.clockin)"
       },
       signal: controller.signal,
     });
@@ -87,22 +87,6 @@ export async function reverseGeocode(
   } finally {
     clearTimeout(timer);
   }
-
-  const a = data.address || {};
-  const parts = [
-    a.road || a.pedestrian || a.footway,
-    a.suburb || a.neighbourhood || a.quarter,
-    a.city || a.town || a.village || a.county,
-    a.state,
-    a.country,
-  ].filter(Boolean);
-
-  return {
-    label: parts.join(", ") || data.display_name || "Unknown Location",
-    fullAddress: data.display_name || "Unknown Location",
-    city: a.city || a.town || a.village || a.county || "",
-    country: a.country || "",
-  };
 }
 
 /**
@@ -132,12 +116,12 @@ export function useLocationCapture() {
         );
       }
 
-      const { latitude, longitude, accuracy } = coords;
-      const geoInfo = await reverseGeocode(latitude, longitude);
+      const { lat, lng, accuracy } = coords;
+      const geoInfo = await reverseGeocode(lat, lng);
 
       const locationData: LocationData = {
-        lat: latitude,
-        lng: longitude,
+        lat,
+        lng,
         accuracy: Math.round(accuracy),
         label: geoInfo.label,
         fullAddress: geoInfo.fullAddress,
