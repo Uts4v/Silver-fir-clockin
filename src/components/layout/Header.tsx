@@ -36,10 +36,10 @@ export const Header = () => {
         const data = snap.data() as { logoUrl?: string } | undefined;
         setCompanyLogoUrl(data?.logoUrl || "");
       },
-      (error) => console.error("Error listening to company doc:", error)
+      (error) => console.warn("Company logo read failed for", profile.companyId, error)
     );
     return () => unsub();
-  }, [profile?.companyId]);
+  }, [profile?.companyId, profile]);
 
   // Listen for unread notes
   useEffect(() => {

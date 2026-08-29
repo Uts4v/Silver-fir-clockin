@@ -1219,8 +1219,8 @@ const [empDepartment,  setEmpDepartment]  = useState("");
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="w-16 h-16 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)"}}>
-                    {companyLogo ? (
-                      <img src={companyLogo} alt="Company logo" className="w-full h-full object-contain"/>
+                    {(company?.logoUrl || companyLogo) ? (
+                      <img src={company?.logoUrl || companyLogo} alt="Company logo" className="w-full h-full object-contain"/>
                     ) : (
                       <Building2 className="w-6 h-6 text-white/20"/>
                     )}
