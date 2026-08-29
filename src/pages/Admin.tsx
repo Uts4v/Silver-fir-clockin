@@ -7,11 +7,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuthContext } from "@/contexts/AuthContext";
-import { db, auth } from "@/integrations/firebase/client";
+import { db, firebaseConfig } from "@/integrations/firebase/client";
 import { formatTimeShort } from "@/hooks/useWorkSession";
 import { useLocationCapture } from "@/hooks/useLocation";
 import { toast } from "sonner";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence, signOut } from "firebase/auth";
+import { initializeApp, deleteApp } from "firebase/app";
 import {
   collection, doc, deleteDoc, getDocs, getDoc, onSnapshot, Timestamp,
   updateDoc, setDoc, query, orderBy, limit, where,
@@ -448,22 +449,31 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     if (!company) { toast.error("Company not loaded"); return; }
     setCreatingEmp(true);
     try {
-      const cred = await createUserWithEmailAndPassword(auth, empEmail, empPassword);
-      await setDoc(doc(db,"users",cred.user.uid), {
-        id: cred.user.uid,
-        userId: cred.user.uid,
-        fullName: empName.trim(),
-        email: empEmail,
-        designation: "Employee",
-        teaPoints: 0,
-        role: "user",
-        companyId: company.id,
-        companyName: company.name,
-        ...(empDepartment.trim() ? { department: empDepartment.trim() } : {}),
-        ...(empPhone.trim() ? { phone: normalizePhone(empPhone) } : {}),
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-      });
+      // Create the account on an isolated auth instance so the admin's own session
+      // is NOT switched to the new employee (createUserWithEmailAndPassword signs in).
+      const tmpApp = initializeApp(firebaseConfig, "admin-create-tmp");
+      const tmpAuth = initializeAuth(tmpApp, { persistence: inMemoryPersistence });
+      try {
+        const cred = await createUserWithEmailAndPassword(tmpAuth, empEmail, empPassword);
+        await setDoc(doc(db,"users",cred.user.uid), {
+          id: cred.user.uid,
+          userId: cred.user.uid,
+          fullName: empName.trim(),
+          email: empEmail,
+          designation: "Employee",
+          teaPoints: 0,
+          role: "user",
+          companyId: company.id,
+          companyName: company.name,
+          ...(empDepartment.trim() ? { department: empDepartment.trim() } : {}),
+          ...(empPhone.trim() ? { phone: normalizePhone(empPhone) } : {}),
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+        });
+      } finally {
+        try { await signOut(tmpAuth); } catch {}
+        try { deleteApp(tmpApp); } catch {}
+      }
       toast.success(`Employee "${empName}" created`);
       setEmpFormOpen(false);
       setEmpName(""); setEmpEmail(""); setEmpPassword(""); setEmpDepartment(""); setEmpPhone("");
