@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { notifyNoteSent } from "@/integrations/notifications";
 
 interface Note {
   id: string;
@@ -191,7 +192,14 @@ export default function NotesSubscriptionsManager() {
       setNoteRecipient("all");
       setNotePriority("normal");
       setNoteDialogOpen(false);
-      
+
+      notifyNoteSent({
+        recipientId: noteRecipient,
+        companyId: profile?.companyId,
+        senderName: profile?.fullName || "Unknown",
+        subject: noteSubject,
+      });
+
       await fetchData();
     } catch (error) {
       console.error("Error sending note:", error);

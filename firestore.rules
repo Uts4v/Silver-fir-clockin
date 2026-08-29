@@ -127,5 +127,19 @@ service cloud.firestore {
       allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
       allow write: if isAdmin();
     }
+
+    // ── Notifications ──────────────────────────────────────────
+    // Recipients read their own feed and mark items read; anyone in the same
+    // company (verified via trusted get()) may push a notification to a
+    // colleague's feed (leave requests, notes, approvals…).
+    match /notifications/{uid}/items/{itemId} {
+      allow read: if request.auth != null && request.auth.uid == uid && !isBlocked();
+      allow create: if isSignedIn() && !isBlocked() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId ==
+          get(/databases/$(database)/documents/users/$(uid)).data.companyId;
+      allow update: if request.auth != null && request.auth.uid == uid && !isBlocked();
+    }
   }
 }

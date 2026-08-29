@@ -19,6 +19,7 @@ import Admin from "./pages/Admin";
 import LeaveRequests from "./pages/LeaveRequests";
 import NotFound from "./pages/NotFound";
 import NotesSubscriptionsManager from "./pages/NotesSubscriptionsManager";
+import { InstallBanner } from "@/components/InstallApp";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,7 @@ const App = () => (
         <AuthProvider>
           <Toaster />
           <Sonner />
+          <InstallBanner />
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Index />} />

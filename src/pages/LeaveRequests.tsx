@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { notifyLeaveSubmitted, notifyLeaveReviewed } from "@/integrations/notifications";
 import {
   Loader2,
   CalendarPlus,
@@ -102,6 +103,12 @@ const LeaveRequests = () => {
         updatedAt: Timestamp.now(),
       });
       toast.success("Leave request submitted");
+      notifyLeaveSubmitted({
+        companyId: profile.companyId || "",
+        employeeName: profile.fullName,
+        dates: `${startDate} → ${endDate}`,
+        reason: reason.trim(),
+      });
       setStartDate(""); setEndDate(""); setReason("");
       fetchRequests();
     } catch (err) {
@@ -124,6 +131,14 @@ const LeaveRequests = () => {
         updatedAt: Timestamp.now(),
       });
       toast.success(`Leave ${status}`);
+      if (req) {
+        notifyLeaveReviewed({
+          employeeId: req.employeeId,
+          status,
+          reviewerName: profile?.fullName,
+          dates: `${req.startDate} → ${req.endDate}`,
+        });
+      }
       fetchRequests();
     } catch (err) {
       console.error("Failed to review leave request:", err);

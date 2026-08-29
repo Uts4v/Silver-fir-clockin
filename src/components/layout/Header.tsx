@@ -1,8 +1,10 @@
 import { motion } from "framer-motion";
 import { useNavigate, useLocation } from "react-router-dom";
-import { User, Settings, LogOut, Loader2, Shield, Mail, CalendarDays } from "lucide-react";
+import { User, Settings, LogOut, Loader2, Shield, Mail, CalendarDays, Bell, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/contexts/AuthContext";
+import { useNotifications } from "@/hooks/useNotifications";
+import { InstallPanel } from "@/components/InstallApp";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +24,7 @@ export const Header = () => {
   const location = useLocation();
   const [unreadCount, setUnreadCount] = useState(0);
   const [companyLogoUrl, setCompanyLogoUrl] = useState<string>("");
+  const { items: notifs, unread: notifUnread, markRead, markAllRead } = useNotifications();
 
   // Follow the company doc so the saved company logo appears in the top bar.
   useEffect(() => {
@@ -167,6 +170,65 @@ export const Header = () => {
           transition={{ delay: 0.2 }}
         >
           <ThemeToggle />
+          {user && (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="relative" title="Notifications">
+                    <Bell className="w-5 h-5 text-muted-foreground" />
+                    {notifUnread > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                        {notifUnread}
+                      </span>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-80">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                    <p className="text-sm font-semibold text-foreground">Notifications</p>
+                    {notifUnread > 0 && (
+                      <button onClick={() => markAllRead()} className="text-[11px] text-primary hover:underline">
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifs.length === 0 ? (
+                      <p className="px-3 py-8 text-center text-xs text-muted-foreground">No notifications yet</p>
+                    ) : (
+                      notifs.map((n) => (
+                        <DropdownMenuItem
+                          key={n.id}
+                          onClick={() => { markRead(n.id); if (n.link) navigate(n.link); }}
+                          className={`flex-col items-start gap-0.5 py-2.5 px-3 ${n.read ? "opacity-55" : ""}`}
+                        >
+                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${n.read ? "bg-muted" : "bg-primary"}`} />
+                            {n.title}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground line-clamp-2">{n.message}</span>
+                          <span className="text-[10px] text-muted-foreground/60">
+                            {n.createdAt?.toDate?.()?.toLocaleString() || ""}
+                          </span>
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="relative" title="Download / Install app">
+                    <Download className="w-5 h-5 text-muted-foreground" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-80 p-4">
+                  <InstallPanel />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
           {loading ? (
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
           ) : user ? (

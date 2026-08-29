@@ -1,1 +1,17 @@
-{"name":"Silver Fir – Clock-In & Productivity","short_name":"Silver Fir","icons":[{"src":"/favicon.svg","sizes":"any","type":"image/svg+xml"}],"theme_color":"#1e4a2b","background_color":"#ffffff","display":"standalone"}
+{
+  "name": "Silver Fir – Clock-In & Productivity",
+  "short_name": "Silver Fir",
+  "description": "Clock-in, time tracking, leave requests and team productivity.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#1e4a2b",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

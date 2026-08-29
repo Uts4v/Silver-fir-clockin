@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
+import { InstallPanel } from "@/components/InstallApp";
 import { useAuthContext } from "@/contexts/AuthContext";
 import { db } from "@/integrations/firebase/client";
 import {
@@ -235,6 +236,30 @@ const Profile = () => {
 
       <main className="container px-4 md:px-6 py-8 md:py-12">
         <div className="max-w-4xl mx-auto space-y-8">
+          {/* Download / Install App */}
+          <motion.div
+            className="tea-card"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-tea-forest flex items-center justify-center overflow-hidden">
+                  <img src="/img/company-logo.jpeg" alt="Silver Fir" className="w-full h-full object-cover" />
+                </div>
+                <div>
+                  <h2 className="font-display font-semibold text-lg text-foreground">Download the Silver Fir App</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Install it on any device — it works offline and opens like a real app.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4">
+              <InstallPanel />
+            </div>
+          </motion.div>
+
           {/* Profile Header */}
           <motion.div
             className="tea-card relative overflow-hidden"

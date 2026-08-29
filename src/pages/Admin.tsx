@@ -583,6 +583,17 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     try {
       const nr = cur==="admin"?"user":"admin";
       await updateDoc(doc(db,"users",uid),{role:nr,updatedAt:Timestamp.now()});
+      // Keep companies/{id}.adminUids in sync so employees can resolve admins for notifications.
+      const u = users.find(x=>x.id===uid);
+      if (u?.companyId) {
+        const c = await getDoc(doc(db,"companies",u.companyId));
+        if (c.exists()) {
+          const cdata = c.data() as { adminUids?: string[] };
+          const list = cdata.adminUids && cdata.adminUids.length ? cdata.adminUids : [];
+          const next = cur==="user" ? Array.from(new Set([...list, uid])) : list.filter(x=>x!==uid);
+          await updateDoc(doc(db,"companies",u.companyId),{adminUids:next,updatedAt:Timestamp.now()});
+        }
+      }
       fetchUsers(); toast.success(`Role updated to ${nr}`);
     } catch { setError("Failed to update role"); }
   };

@@ -187,6 +187,7 @@ export const useAuth = () => {
         username,
         inviteCode,
         adminUid: uid,
+        adminUids: [uid],
         radiusMeters: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
