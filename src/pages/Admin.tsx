@@ -17,6 +17,7 @@ import {
   updateDoc, setDoc, query, orderBy, limit, where,
 } from "firebase/firestore";
 import { Profile, Company } from "@/integrations/firebase/types";
+import { normalizePhone } from "@/hooks/useAuth";
 import AdminLocationView from "@/components/admin/AdminLocationView";
 import EmployeeLocationsMap from "@/components/admin/EmployeeLocationsMap";
 import AllEmployeesLocationsMap from "@/components/admin/AllEmployeesLocationsMap";
@@ -182,7 +183,8 @@ const Admin = () => {
   const [empName,        setEmpName]       = useState("");
   const [empEmail,       setEmpEmail]      = useState("");
   const [empPassword,    setEmpPassword]   = useState("");
-  const [empDepartment,  setEmpDepartment] = useState("");
+const [empDepartment,  setEmpDepartment]  = useState("");
+  const [empPhone,       setEmpPhone]       = useState("");
   const [creatingEmp,    setCreatingEmp]   = useState(false);
 
   const { captureLocation } = useLocationCapture();
@@ -382,12 +384,13 @@ const Admin = () => {
         companyId: company.id,
         companyName: company.name,
         ...(empDepartment.trim() ? { department: empDepartment.trim() } : {}),
+        ...(empPhone.trim() ? { phone: normalizePhone(empPhone) } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       });
       toast.success(`Employee "${empName}" created`);
       setEmpFormOpen(false);
-      setEmpName(""); setEmpEmail(""); setEmpPassword(""); setEmpDepartment("");
+      setEmpName(""); setEmpEmail(""); setEmpPassword(""); setEmpDepartment(""); setEmpPhone("");
       fetchUsers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create employee");
@@ -1436,6 +1439,11 @@ const Admin = () => {
               <Label className="text-[10px] text-white/25 uppercase tracking-widest">Temporary Password</Label>
               <Input required type="text" value={empPassword} onChange={e=>setEmpPassword(e.target.value)} placeholder="min 6 characters"
                 minLength={6} className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+            </div>
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Phone Number (optional)</Label>
+              <Input value={empPhone} onChange={e=>setEmpPhone(e.target.value)} placeholder="+977 98XXXXXXXX"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
             </div>
             <div>
               <Label className="text-[10px] text-white/25 uppercase tracking-widest">Department</Label>

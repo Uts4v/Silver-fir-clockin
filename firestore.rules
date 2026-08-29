@@ -81,15 +81,11 @@ service cloud.firestore {
     }
 
     // ── Live status / presence ─────────────────────────────────────────────
-    // Employees write their current status (working/break/offline); the company
-    // admin reads every employee's presence doc for the realtime dashboard.
+    // Employees write their current status (working/break/offline); any signed-in
+    // user may read presence so the admin's filtered collection query is never
+    // blocked by a single doc missing its companyId.
     match /liveStatus/{uid} {
-      allow read: if isSignedIn() && (
-        request.auth.uid == uid ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         myProfile().data.companyId != null &&
-         myProfile().data.companyId == resource.data.companyId)
-      );
+      allow read: if isSignedIn();
       allow write: if isSignedIn() && request.auth.uid == uid;
     }
 

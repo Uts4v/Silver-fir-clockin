@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { TeaLeafIcon } from "@/components/ui/TeaLeafIcon";
@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthContext } from "@/contexts/AuthContext";
+import { normalizePhone } from "@/hooks/useAuth";
+import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
+import { auth } from "@/integrations/firebase/client";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -20,6 +23,7 @@ import {
   Building2,
   Users,
   KeyRound,
+  Smartphone,
   type LucideIcon,
 } from "lucide-react";
 
@@ -40,6 +44,14 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Phone-OTP sign in / join
+  const [loginTab, setLoginTab] = useState<"email" | "phone">("email");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const verifierRef = useRef<RecaptchaVerifier | null>(null);
+
   // Register company
   const [companyName, setCompanyName] = useState("");
   const [companyUsername, setCompanyUsername] = useState("");
@@ -52,8 +64,15 @@ const Auth = () => {
   const [fullName, setFullName] = useState("");
   const [department, setDepartment] = useState("");
 
-  const { signIn, signUp, registerCompany } = useAuthContext();
+  const { signIn, signUp, registerCompany, getProfile, registerPhoneUser, refetchProfile, signOut } = useAuthContext();
   const navigate = useNavigate();
+
+  const getPhoneVerifier = () => {
+    if (!verifierRef.current) {
+      verifierRef.current = new RecaptchaVerifier(auth, "phone-recaptcha", { size: "invisible" });
+    }
+    return verifierRef.current;
+  };
 
   const resetFields = () => {
     setEmail("");
@@ -66,6 +85,10 @@ const Auth = () => {
     setCompanyKey("");
     setFullName("");
     setDepartment("");
+    setPhone("");
+    setOtp("");
+    setConfirmResult(null);
+    setLoginTab("email");
   };
 
   const switchMode = (next: Mode) => {
@@ -113,6 +136,10 @@ const Auth = () => {
 
   const handleJoinCompany = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim() || !password.trim()) {
+      toast.error("Email and password are required for email sign-up.");
+      return;
+    }
     setLoading(true);
     try {
       const { error } = await signUp({
@@ -121,6 +148,7 @@ const Auth = () => {
         email,
         password,
         department,
+        phone,
       });
       if (error) throw error;
       toast.success("Account created! Joined your company.");
@@ -130,6 +158,90 @@ const Auth = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const sendLoginCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!phone.trim()) { toast.error("Enter your phone number"); return; }
+    setPhoneBusy(true);
+    try {
+      const conf = await signInWithPhoneNumber(auth, normalizePhone(phone), getPhoneVerifier());
+      setConfirmResult(conf);
+      toast.success("Verification code sent!");
+    } catch (error) {
+      toast.error(errMsg(error));
+    } finally {
+      setPhoneBusy(false);
+    }
+  };
+
+  const verifyLoginCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirmResult || !otp.trim()) return;
+    setPhoneBusy(true);
+    try {
+      const cred = await confirmResult.confirm(otp);
+      const profile = await getProfile(cred.user.uid);
+      if (!profile) {
+        await signOut();
+        throw new Error("No account is linked to this number. New here? Use 'Join Company' and sign up with your phone number.");
+      }
+      await refetchProfile();
+      toast.success("Welcome back!");
+      navigate("/");
+    } catch (error) {
+      toast.error(errMsg(error));
+    } finally {
+      setPhoneBusy(false);
+    }
+  };
+
+  const sendJoinCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!companyKey.trim()) { toast.error("Enter your company username or invite code"); return; }
+    if (!fullName.trim()) { toast.error("Enter your full name"); return; }
+    if (!phone.trim()) { toast.error("Enter your phone number"); return; }
+    setLoading(true);
+    try {
+      const conf = await signInWithPhoneNumber(auth, normalizePhone(phone), getPhoneVerifier());
+      setConfirmResult(conf);
+      toast.success("Verification code sent!");
+    } catch (error) {
+      toast.error(errMsg(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyJoinCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirmResult || !otp.trim() || !phone.trim()) return;
+    setLoading(true);
+    try {
+      const cred = await confirmResult.confirm(otp);
+      const { error } = await registerPhoneUser({
+        companyKey,
+        fullName,
+        department,
+        phone,
+        uid: cred.user.uid,
+      });
+      if (error) throw error;
+      await refetchProfile();
+      toast.success("Account created! Joined your company.");
+      navigate("/");
+    } catch (error) {
+      toast.error(errMsg(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleJoinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (email.trim()) return handleJoinCompany(e);
+    if (!confirmResult) return sendJoinCode(e);
+    return verifyJoinCode(e);
   };
 
   const title =
@@ -226,6 +338,9 @@ const Auth = () => {
             </div>
           </div>
 
+          {/* Container that hosts the invisible reCAPTCHA for phone OTP */}
+          <div id="phone-recaptcha" className="w-0 h-0 overflow-hidden" />
+
           {/* Mode switcher */}
           <div className="flex items-center justify-center gap-1.5 mb-6 bg-muted/50 p-1.5 rounded-xl">
             {[
@@ -261,40 +376,124 @@ const Auth = () => {
 
             <AnimatePresence mode="wait">
               {mode === "login" && (
-                <motion.form
-                  key="login"
-                  onSubmit={handleLogin}
-                  className="space-y-5"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.15 }}
-                >
-                  <Field label="Email" htmlFor="login-email" icon={<Mail className="w-4 h-4" />}>
-                    <Input
-                      id="login-email"
-                      type="email"
-                      placeholder="you@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="pl-10"
-                      required
-                    />
-                  </Field>
-                  <Field label="Password" htmlFor="login-password" icon={<Lock className="w-4 h-4" />}>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="pl-10"
-                      required
-                      minLength={6}
-                    />
-                  </Field>
-                  <SubmitButton loading={loading} label="Sign In" />
-                </motion.form>
+                <div key="login" className="space-y-4">
+                  <div className="flex items-center gap-1.5 p-1 bg-muted/50 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setLoginTab("email")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold transition-all ${
+                        loginTab === "email"
+                          ? "bg-background text-primary shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      Email &amp; Password
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLoginTab("phone")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold transition-all ${
+                        loginTab === "phone"
+                          ? "bg-background text-primary shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Smartphone className="w-3.5 h-3.5" />
+                      Phone Number
+                    </button>
+                  </div>
+
+                  {loginTab === "email" && (
+                    <motion.form
+                      key="login-email"
+                      onSubmit={handleLogin}
+                      className="space-y-5"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Field label="Email" htmlFor="login-email" icon={<Mail className="w-4 h-4" />}>
+                        <Input
+                          id="login-email"
+                          type="email"
+                          placeholder="you@example.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="pl-10"
+                          required
+                        />
+                      </Field>
+                      <Field label="Password" htmlFor="login-password" icon={<Lock className="w-4 h-4" />}>
+                        <Input
+                          id="login-password"
+                          type="password"
+                          placeholder="••••••••"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="pl-10"
+                          required
+                          minLength={6}
+                        />
+                      </Field>
+                      <SubmitButton loading={loading} label="Sign In" />
+                    </motion.form>
+                  )}
+
+                  {loginTab === "phone" && (
+                    <motion.form
+                      key="login-phone"
+                      onSubmit={confirmResult ? verifyLoginCode : sendLoginCode}
+                      className="space-y-5"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Field label="Phone Number" htmlFor="login-phone" icon={<Smartphone className="w-4 h-4" />}>
+                        <Input
+                          id="login-phone"
+                          type="tel"
+                          placeholder="+977 98XXXXXXXX"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="pl-10"
+                          required
+                        />
+                      </Field>
+                      <p className="text-[11px] text-muted-foreground -mt-2">
+                        Include your country code. We'll text you a 6-digit code.
+                      </p>
+                      {confirmResult ? (
+                        <>
+                          <Field label="Verification Code" htmlFor="login-otp" icon={<KeyRound className="w-4 h-4" />}>
+                            <Input
+                              id="login-otp"
+                              type="text"
+                              inputMode="numeric"
+                              placeholder="6-digit code"
+                              value={otp}
+                              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                              className="pl-10 tracking-widest"
+                              required
+                            />
+                          </Field>
+                          <SubmitButton loading={phoneBusy} label="Verify &amp; Sign In" />
+                          <button
+                            type="button"
+                            onClick={() => { setConfirmResult(null); setOtp(""); }}
+                            className="w-full text-center text-xs text-muted-foreground hover:text-foreground mt-1"
+                          >
+                            Change number or resend code
+                          </button>
+                        </>
+                      ) : (
+                        <SubmitButton loading={phoneBusy} label="Send Code" />
+                      )}
+                    </motion.form>
+                  )}
+                </div>
               )}
 
               {mode === "company" && (
@@ -414,7 +613,7 @@ const Auth = () => {
               {mode === "employee" && (
                 <motion.form
                   key="employee"
-                  onSubmit={handleJoinCompany}
+                  onSubmit={handleJoinSubmit}
                   className="space-y-4"
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -458,6 +657,23 @@ const Auth = () => {
                     />
                   </Field>
 
+                  <Field label="Phone Number (sign in without email)" htmlFor="join-phone" icon={<Smartphone className="w-4 h-4" />}>
+                    <Input
+                      id="join-phone"
+                      type="tel"
+                      placeholder="+977 98XXXXXXXX"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="pl-10"
+                    />
+                  </Field>
+
+                  <div className="flex items-center gap-3 opacity-60">
+                    <div className="h-px flex-1 bg-border" />
+                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground">or use email</span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+
                   <Field label="Email" htmlFor="join-email" icon={<Mail className="w-4 h-4" />}>
                     <Input
                       id="join-email"
@@ -466,7 +682,6 @@ const Auth = () => {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       className="pl-10"
-                      required
                     />
                   </Field>
 
@@ -478,12 +693,29 @@ const Auth = () => {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       className="pl-10"
-                      required
                       minLength={6}
                     />
                   </Field>
 
-                  <SubmitButton loading={loading} label="Join Company" />
+                  {confirmResult && (
+                    <Field label="Verification Code" htmlFor="join-otp" icon={<KeyRound className="w-4 h-4" />}>
+                      <Input
+                        id="join-otp"
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="6-digit code"
+                        value={otp}
+                        onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                        className="pl-10 tracking-widest"
+                        required
+                      />
+                    </Field>
+                  )}
+
+                  <SubmitButton
+                    loading={loading}
+                    label={email.trim() ? "Join Company" : confirmResult ? "Verify &amp; Join" : "Send Code"}
+                  />
                 </motion.form>
               )}
             </AnimatePresence>

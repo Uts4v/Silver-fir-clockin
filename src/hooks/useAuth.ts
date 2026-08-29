@@ -39,6 +39,7 @@ export interface Profile {
   companyId?: string;
   companyName?: string;
   department?: string;
+  phone?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -59,7 +60,18 @@ export interface JoinCompanyInput {
   email: string;
   password: string;
   department?: string;
+  phone?: string;
 }
+
+// Normalize a phone number so the same number is always stored/looked up identically.
+export const normalizePhone = (raw: string) => (raw || "").replace(/[\s\-().]/g, "").trim();
+
+// Phone-verified employees have no email; give them a stable placeholder so the
+// Profile type (whose email is required) stays safe everywhere it's rendered.
+export const syntheticEmailForPhone = (phone: string) => {
+  const digits = normalizePhone(phone).replace(/\D/g, "");
+  return `phone_${digits.slice(-6) || "user"}@silverfir.app`;
+};
 
 export const useAuth = () => {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -194,6 +206,7 @@ export const useAuth = () => {
         companyId: company.id,
         companyName: company.name,
         ...(input.department?.trim() ? { department: input.department.trim() } : {}),
+        ...(input.phone ? { phone: normalizePhone(input.phone) } : {}),
         createdAt: serverTimestamp() as Timestamp,
         updatedAt: serverTimestamp() as Timestamp,
       };
@@ -201,6 +214,53 @@ export const useAuth = () => {
       await setDoc(doc(db, "users", userCredential.user.uid), profileData);
 
       return { data: userCredential, error: null };
+    } catch (error) {
+      return { data: null, error };
+    }
+  };
+
+  // Fetch a user's own profile document by uid (returns null when absent).
+  const getProfile = useCallback(async (userId: string) => {
+    return fetchProfile(userId);
+  }, [fetchProfile]);
+
+  // Completes a phone-OTP join: the uid comes from a freshly-verified phone
+  // sign-in, so no email account is ever created for email-less employees.
+  const registerPhoneUser = async (input: {
+    companyKey: string;
+    fullName: string;
+    department?: string;
+    phone: string;
+    uid: string;
+  }) => {
+    try {
+      const company = await findCompanyByKey(input.companyKey);
+      if (!company) {
+        return { data: null, error: new Error("Invalid company username or invite code.") };
+      }
+      if (!input.phone) {
+        return { data: null, error: new Error("Phone number is required.") };
+      }
+
+      const phone = normalizePhone(input.phone);
+      const profileData: Profile = {
+        id: input.uid,
+        userId: input.uid,
+        fullName: input.fullName.trim(),
+        email: syntheticEmailForPhone(phone),
+        designation: "Employee",
+        teaPoints: 0,
+        role: "user",
+        companyId: company.id,
+        companyName: company.name,
+        phone,
+        ...(input.department?.trim() ? { department: input.department.trim() } : {}),
+        createdAt: serverTimestamp() as Timestamp,
+        updatedAt: serverTimestamp() as Timestamp,
+      };
+
+      await setDoc(doc(db, "users", input.uid), profileData);
+      return { data: profileData, error: null };
     } catch (error) {
       return { data: null, error };
     }
@@ -277,6 +337,8 @@ export const useAuth = () => {
     signUp,
     signIn,
     signOut,
+    getProfile,
+    registerPhoneUser,
     changePassword,
     updateProfile,
     refetchProfile: () => user && fetchProfile(user.uid).then(setProfile),

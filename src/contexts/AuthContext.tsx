@@ -20,6 +20,14 @@ interface AuthContextType {
   signOut: () => Promise<AuthResult>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<AuthResult>;
   updateProfile: (updates: Partial<Profile>) => Promise<AuthResult>;
+  getProfile: (userId: string) => Promise<Profile | null>;
+  registerPhoneUser: (input: {
+    companyKey: string;
+    fullName: string;
+    department?: string;
+    phone: string;
+    uid: string;
+  }) => Promise<AuthResult>;
   refetchProfile: () => void;
 }
 
