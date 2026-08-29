@@ -291,9 +291,6 @@ const Auth = () => {
             transition={{ duration: 0.6 }}
           >
             <div className="flex items-center gap-4 mb-8">
-              <div className="w-16 h-16">
-                <img src="/img/danfe.png" alt="Silver Fir logo" className="w-16 h-16 object-contain" />
-              </div>
               <div>
                 <h1 className="font-display text-4xl font-semibold">Silver Fir</h1>
                 <p className="text-white/80">Clock-in & Productivity</p>
@@ -327,15 +324,10 @@ const Auth = () => {
           transition={{ duration: 0.5 }}
         >
           {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="w-10 h-10">
-              <img src="/img/danfe.png" alt="Silver Fir logo" className="w-10 h-10 object-contain" />
-            </div>
-            <div>
-              <h1 className="font-display text-2xl font-semibold text-foreground">
-                Silver Fir
-              </h1>
-            </div>
+          <div className="lg:hidden mb-8 text-center">
+            <h1 className="font-display text-2xl font-semibold text-foreground">
+              Silver Fir
+            </h1>
           </div>
 
           {/* Container that hosts the invisible reCAPTCHA for phone OTP */}

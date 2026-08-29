@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { useNavigate, useLocation } from "react-router-dom";
-import logo from "@/img/danfe.png";
 import { User, Settings, LogOut, Loader2, Shield, Mail, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/contexts/AuthContext";
@@ -113,8 +112,12 @@ export const Header = () => {
           animate={{ opacity: 1, x: 0 }}
           onClick={() => navigate("/")}
         >
-          <div className="w-9 h-9 text-primary">
-            <img src={companyLogoUrl || logo} alt="Logo" className="w-9 h-9 object-contain" />
+          <div className="w-9 h-9">
+            {companyLogoUrl ? (
+              <img src={companyLogoUrl} alt="Company logo" className="w-9 h-9 object-contain" />
+            ) : (
+              <img src="/img/company-logo.jpeg" alt="Company logo" className="w-9 h-9 object-contain" />
+            )}
           </div>
           <div className="flex flex-col">
             <span className="font-display text-xl font-semibold text-foreground">

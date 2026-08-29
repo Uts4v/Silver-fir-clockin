@@ -37,7 +37,7 @@ import {
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
   Activity, Zap, Award, LayoutDashboard, CreditCard,
   Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
-  Building2, KeyRound, Check, Image as ImageIcon, Trash2,
+  Building2, KeyRound, Check, Image as ImageIcon,
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -399,6 +399,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error("Image is too large (max 5MB)"); return; }
     try {
       const resized = await resizeLogo(file);
       setCompanyLogo(resized);
@@ -411,9 +412,11 @@ const [empDepartment,  setEmpDepartment]  = useState("");
   const saveCompanyLogo = async () => {
     if (!company) return;
     if (!companyLogo.trim()) { toast.error("Choose a logo image first"); return; }
+    if (companyLogo.length > 900000) { toast.error("Image is too large (max ~1MB)"); return; }
     setSavingLogo(true);
     try {
       await updateDoc(doc(db,"companies",company.id), { logoUrl: companyLogo, updatedAt: Timestamp.now() });
+      setCompanyLogo(companyLogo);
       setCompany(prev => prev ? { ...prev, logoUrl: companyLogo } : prev);
       toast.success("Company logo saved");
     } catch (err) {
@@ -501,9 +504,36 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     setEmpLoading(false);
   };
 
-  const removeUser = async (uid:string) => {
-    try { await deleteDoc(doc(db,"users",uid)); fetchUsers(); }
-    catch { setError("Failed to remove user"); }
+  const deleteUserData = async (uid:string) => {
+    // Sessions + breaks subcollections
+    const sessionsSnap = await getDocs(collection(db,"users",uid,"sessions"));
+    await Promise.all(sessionsSnap.docs.map(async (s) => {
+      const breaksSnap = await getDocs(collection(db,"users",uid,"sessions",s.id,"breaks"));
+      await Promise.all(breaksSnap.docs.map(b => deleteDoc(doc(db,"users",uid,"sessions",s.id,"breaks",b.id))));
+      await deleteDoc(doc(db,"users",uid,"sessions",s.id));
+    }));
+    try { await deleteDoc(doc(db,"liveStatus",uid)); } catch {}
+    // Leave requests + personal notes owned by the user
+    const leaves = await getDocs(query(collection(db,"leaveRequests"), where("employeeId","==",uid)));
+    await Promise.all(leaves.docs.map(l => deleteDoc(doc(db,"leaveRequests",l.id))));
+    const pNotes = await getDocs(query(collection(db,"personalNotes"), where("userId","==",uid)));
+    await Promise.all(pNotes.docs.map(n => deleteDoc(doc(db,"personalNotes",n.id))));
+  };
+
+  const removeUser = async (u: UserWithStats) => {
+    try {
+      // Firebase Auth records can only be destroyed server-side (paid plan), so on the
+      // free plan we block the uid — the client hooks and Firestore rules both reject it.
+      await setDoc(doc(db,"blockedUsers",u.id), {
+        email: u.email || "",
+        name: u.fullName || "",
+        blockedAt: Timestamp.now(),
+      });
+      await deleteUserData(u.id);
+      await deleteDoc(doc(db,"users",u.id));
+      toast.success("User removed and blocked from logging in");
+      fetchUsers();
+    } catch { setError("Failed to remove user"); }
   };
 
   const toggleRole = async (uid:string, cur:"admin"|"user") => {
@@ -692,7 +722,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel className="border-white/10 text-white/55 rounded-xl" style={{background:"rgba(255,255,255,0.04)"}}>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={()=>removeUser(u.id)} className="bg-rose-600 hover:bg-rose-700 rounded-xl">Delete</AlertDialogAction>
+                <AlertDialogAction onClick={()=>removeUser(u)} className="bg-rose-600 hover:bg-rose-700 rounded-xl">Delete</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

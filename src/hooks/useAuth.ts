@@ -21,11 +21,13 @@ import {
   query,
   where,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   Timestamp,
   DocumentData
 } from "firebase/firestore";
 import { auth, db } from "@/integrations/firebase/client";
+import { toast } from "sonner";
 
 export interface Profile {
   id: string;
@@ -106,6 +108,23 @@ export const useAuth = () => {
 
     return () => unsubscribe();
   }, [fetchProfile]);
+
+  // Blocked accounts: admin can't destroy the Auth credential client-side, so a
+  // blockedUsers/{uid} doc signs the account out everywhere it's used — immediately.
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(doc(db, "blockedUsers", user.uid), (snap) => {
+      if (snap.exists()) {
+        toast.error("Your account has been disabled by the administrator.");
+        void firebaseSignOut(auth);
+        setUser(null);
+        setProfile(null);
+      }
+    }, (error) => {
+      console.warn("blockedUsers listener error:", error);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   const findCompanyByKey = useCallback(async (key: string) => {
     const normalized = key.trim().toLowerCase();

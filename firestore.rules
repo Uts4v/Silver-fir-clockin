@@ -10,30 +10,35 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function isAdmin() {
+    function isBlocked() {
       return isSignedIn() &&
+        exists(/databases/$(database)/documents/blockedUsers/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return isSignedIn() && !isBlocked() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         myProfile().data.role == 'admin';
     }
 
     function sameCompany(companyId) {
-      return isSignedIn() &&
+      return isSignedIn() && !isBlocked() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         myProfile().data.companyId == companyId;
     }
 
     // ── Companies ────────────────────────────────────────────────
     match /companies/{companyId} {
-      allow read: if isSignedIn() && (resource.data.adminUid == request.auth.uid || sameCompany(companyId));
+      allow read: if isSignedIn() && !isBlocked() && (resource.data.adminUid == request.auth.uid || sameCompany(companyId));
       allow create: if isAdmin();
-      allow update: if isSignedIn() && (resource.data.adminUid == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && !isBlocked() && (resource.data.adminUid == request.auth.uid || isAdmin());
       allow delete: if isAdmin();
     }
 
     // ── Users / profiles ─────────────────────────────────────────
     // Allow users to read/write their own profile
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == userId;
       // Allow admins to read/write all user profiles
       allow read, write: if isAdmin();
     }
@@ -46,7 +51,7 @@ service cloud.firestore {
     // ── Session documents ────────────────────────────────────────
     // Users can read/write their own sessions
     match /users/{userId}/sessions/{sessionId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == userId;
       // Allow admins to read all sessions
       allow read: if isAdmin();
     }
@@ -58,7 +63,7 @@ service cloud.firestore {
 
     // Users can read/write their own breaks
     match /users/{userId}/sessions/{sessionId}/breaks/{breakId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == userId;
       // Allow admins to read all breaks
       allow read: if isAdmin();
     }
@@ -72,9 +77,9 @@ service cloud.firestore {
     match /leaveRequests/{leaveRequestId} {
       // Employees can read their own requests; admins read all
       allow read: if isAdmin() ||
-        (request.auth != null && resource.data.employeeId == request.auth.uid);
+        (request.auth != null && !isBlocked() && resource.data.employeeId == request.auth.uid);
       // Employees can create their own requests
-      allow create: if request.auth != null && request.resource.data.employeeId == request.auth.uid;
+      allow create: if request.auth != null && !isBlocked() && request.resource.data.employeeId == request.auth.uid;
       // Only admins can update (approve/reject/notes) or delete
       allow update: if isAdmin();
       allow delete: if isAdmin();
@@ -85,8 +90,8 @@ service cloud.firestore {
     // user may read presence so the admin's filtered collection query is never
     // blocked by a single doc missing its companyId.
     match /liveStatus/{uid} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && request.auth.uid == uid;
+      allow read: if isSignedIn() && !isBlocked();
+      allow write: if isSignedIn() && !isBlocked() && request.auth.uid == uid;
     }
 
     // Notes/Announcements
@@ -94,20 +99,28 @@ service cloud.firestore {
       // Admins can read/write all notes
       allow read, write: if isAdmin();
       // Users can read/write notes sent to them or to all
-      allow read, write: if request.auth != null &&
+      allow read, write: if request.auth != null && !isBlocked() &&
         (resource.data.recipientId == request.auth.uid || resource.data.recipientId == 'all');
     }
 
     // Personal Notes
     match /personalNotes/{noteId} {
       // Users can read/write their own personal notes
-      allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == resource.data.userId;
     }
 
     // Subscriptions
     match /subscriptions/{subscriptionId} {
       // Allow authenticated users to read/write subscriptions
-      allow read, write: if request.auth != null;
+      allow read, write: if request.auth != null && !isBlocked();
+    }
+
+    // ── Blocked accounts ─────────────────────────────────────────
+    // Only the account itself may read its own block record (so the app can show
+    // the "disabled" toast); admins create these, nobody else can touch them.
+    match /blockedUsers/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if isAdmin();
     }
   }
 }
