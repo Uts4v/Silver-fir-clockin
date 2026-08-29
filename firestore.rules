@@ -49,11 +49,13 @@ service cloud.firestore {
     }
 
     // ── Session documents ────────────────────────────────────────
-    // Users can read/write their own sessions
+    // Users can read/write their own sessions; admins can purge anyone's on delete.
     match /users/{userId}/sessions/{sessionId} {
       allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == userId;
       // Allow admins to read all sessions
       allow read: if isAdmin();
+      // Allow admins to delete all sessions (employee removal)
+      allow write: if isAdmin();
     }
 
     // Admins can read all sessions collections
@@ -61,11 +63,13 @@ service cloud.firestore {
       allow read: if isAdmin();
     }
 
-    // Users can read/write their own breaks
+    // Users can read/write their own breaks; admins can purge anyone's on delete.
     match /users/{userId}/sessions/{sessionId}/breaks/{breakId} {
       allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == userId;
       // Allow admins to read all breaks
       allow read: if isAdmin();
+      // Allow admins to delete all breaks (employee removal)
+      allow write: if isAdmin();
     }
 
     // Admins can read all breaks collections
@@ -91,7 +95,7 @@ service cloud.firestore {
     // blocked by a single doc missing its companyId.
     match /liveStatus/{uid} {
       allow read: if isSignedIn() && !isBlocked();
-      allow write: if isSignedIn() && !isBlocked() && request.auth.uid == uid;
+      allow write: if isSignedIn() && !isBlocked() && (request.auth.uid == uid || isAdmin());
     }
 
     // Notes/Announcements
@@ -105,8 +109,9 @@ service cloud.firestore {
 
     // Personal Notes
     match /personalNotes/{noteId} {
-      // Users can read/write their own personal notes
-      allow read, write: if request.auth != null && !isBlocked() && request.auth.uid == resource.data.userId;
+      // Users can read/write their own personal notes; admins can purge any on delete
+      allow read, write: if request.auth != null && !isBlocked() &&
+        (isAdmin() || request.auth.uid == resource.data.userId);
     }
 
     // Subscriptions
@@ -116,10 +121,10 @@ service cloud.firestore {
     }
 
     // ── Blocked accounts ─────────────────────────────────────────
-    // Only the account itself may read its own block record (so the app can show
-    // the "disabled" toast); admins create these, nobody else can touch them.
+    // The account itself may read its own record (so the app can show the
+    // "disabled" toast); admins can read the full list and manage entries.
     match /blockedUsers/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
       allow write: if isAdmin();
     }
   }

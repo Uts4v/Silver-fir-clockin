@@ -36,7 +36,7 @@ import {
   Trash2, Users, Shield, ShieldCheck, RefreshCw, Search,
   Calendar, DollarSign, BarChart3, Clock, Coffee, Target,
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
-  Activity, Zap, Award, LayoutDashboard, CreditCard,
+  Activity, Zap, Award, LayoutDashboard, CreditCard, Ban, Unlock,
   Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
   Building2, KeyRound, Check, Image as ImageIcon,
 } from "lucide-react";
@@ -181,6 +181,7 @@ const Admin = () => {
   const { user, profile, loading: authLoading } = useAuthContext();
 
   const [users,         setUsers]         = useState<UserWithStats[]>([]);
+  const [blocked,       setBlocked]       = useState<Set<string>>(new Set());
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [searchQuery,   setSearchQuery]   = useState("");
@@ -507,6 +508,33 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     return () => unsub();
   },[authLoading,profile?.role,profile?.companyId]);
 
+  // Live list of blocked account uids so rows can show Block/Unblock state.
+  useEffect(()=>{
+    if (authLoading || profile?.role!=="admin") return;
+    const unsub = onSnapshot(collection(db,"blockedUsers"), (snap) => {
+      setBlocked(new Set(snap.docs.map(d=>d.id)));
+    }, (err)=>{ console.error("blockedUsers listener error:", err); });
+    return () => unsub();
+  },[authLoading,profile?.role]);
+
+  const toggleBlock = async (u: UserWithStats, block: boolean) => {
+    try {
+      if (block) {
+        await setDoc(doc(db,"blockedUsers",u.id), {
+          email: u.email || "",
+          name: u.fullName || "",
+          blockedAt: Timestamp.now(),
+        });
+      } else {
+        await deleteDoc(doc(db,"blockedUsers",u.id));
+      }
+      toast.success(block ? `${u.fullName||"User"} blocked` : `${u.fullName||"User"} unblocked`);
+    } catch (err) {
+      console.error("Failed to toggle block:", err);
+      setError("Failed to update block status");
+    }
+  };
+
   const openEmp = async (emp: UserWithStats) => {
     setEmpLoading(true); setSelEmp(emp); setEmpOpen(true);
     const [sessions,prev] = await Promise.all([fetchSessions(emp.id),fetchPrev(emp.id)]);
@@ -539,11 +567,16 @@ const [empDepartment,  setEmpDepartment]  = useState("");
         name: u.fullName || "",
         blockedAt: Timestamp.now(),
       });
-      await deleteUserData(u.id);
+      // Purge is best-effort; blocking must never be held hostage by one failing step.
+      try { await deleteUserData(u.id); }
+      catch (purgeErr) { console.warn("Data purge incomplete:", purgeErr); }
       await deleteDoc(doc(db,"users",u.id));
       toast.success("User removed and blocked from logging in");
       fetchUsers();
-    } catch { setError("Failed to remove user"); }
+    } catch (blockErr) {
+      console.error("Failed to block/remove user:", blockErr);
+      setError("Failed to remove user");
+    }
   };
 
   const toggleRole = async (uid:string, cur:"admin"|"user") => {
@@ -702,17 +735,27 @@ const [empDepartment,  setEmpDepartment]  = useState("");
         </div>
 
         <div>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
-            style={{background:u.role==="admin"?"rgba(129,140,248,0.13)":"rgba(255,255,255,0.05)",color:u.role==="admin"?"#818cf8":"rgba(255,255,255,0.28)"}}>
-            {u.role==="admin"?"Admin":"Member"}
-          </span>
+          {blocked.has(u.id) ? (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
+              style={{background:"rgba(244,63,94,0.13)",color:"#fb7185"}}>
+              Blocked
+            </span>
+          ) : (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
+              style={{background:u.role==="admin"?"rgba(129,140,248,0.13)":"rgba(255,255,255,0.05)",color:u.role==="admin"?"#818cf8":"rgba(255,255,255,0.28)"}}>
+              {u.role==="admin"?"Admin":"Member"}
+            </span>
+          )}
         </div>
 
         <div/>
 
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
+        <div className={`flex items-center gap-1 transition-opacity justify-end ${blocked.has(u.id) ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
           <button onClick={()=>openEmp(u)} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-emerald-500/15 transition-colors" title="View">
             <Eye className="w-3.5 h-3.5 text-emerald-400"/>
+          </button>
+          <button onClick={()=>toggleBlock(u,!blocked.has(u.id))} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-amber-500/15 transition-colors" title={blocked.has(u.id)?"Unblock employee":"Block employee"}>
+            {blocked.has(u.id)?<Unlock className="w-3.5 h-3.5 text-emerald-400"/>:<Ban className="w-3.5 h-3.5 text-amber-400/70"/>}
           </button>
           <button onClick={()=>toggleRole(u.id,u.role||"user")} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-indigo-500/15 transition-colors">
             {u.role==="admin"?<ShieldCheck className="w-3.5 h-3.5 text-indigo-400"/>:<Shield className="w-3.5 h-3.5 text-white/22"/>}
