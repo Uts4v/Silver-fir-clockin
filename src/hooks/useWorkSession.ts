@@ -23,22 +23,30 @@ import { useLocationCapture, getCoords, reverseGeocode } from "@/hooks/useLocati
 import { distanceMeters } from "@/lib/geo";
 
 // ── Company geo-fence cache ────────────────────────────────────────────────
-// Cached in memory + localStorage (6h TTL) so clock-in never waits on a
-// companies/{id} read for every attempt.
+// Cached in memory + localStorage so clock-in never waits on a companies/{id}
+// read for every attempt. A configured geo-fence is trusted for 1h; a *missing*
+// one is re-checked after 60s so a freshly-saved office/radius is picked up fast.
 interface GeofenceInfo { office: OfficeLocation; radius: number }
-const geofenceCache: { companyId: string; data: GeofenceInfo | null } = { companyId: "", data: null };
+const GEOFENCE_TTL = 60 * 60 * 1000;
+const GEOFENCE_NULL_TTL = 60 * 1000;
+const geofenceCache: { companyId: string; data: GeofenceInfo | null; ts: number } = { companyId: "", data: null, ts: 0 };
 
 const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
-  if (geofenceCache.companyId === companyId) return geofenceCache.data;
+  const now = Date.now();
+  if (geofenceCache.companyId === companyId) {
+    const ttl = geofenceCache.data ? GEOFENCE_TTL : GEOFENCE_NULL_TTL;
+    if (now - geofenceCache.ts < ttl) return geofenceCache.data;
+  }
 
   const CACHE_KEY = "sf_geofence_" + companyId;
   const cached = localStorage.getItem(CACHE_KEY);
   if (cached) {
     try {
       const p = JSON.parse(cached);
-      if (p && p.office && p.radius != null && Date.now() - p.ts < 6 * 3600 * 1000) {
+      if (p && p.office && p.radius != null && now - p.ts < GEOFENCE_TTL) {
         geofenceCache.companyId = companyId;
         geofenceCache.data = { office: p.office, radius: p.radius };
+        geofenceCache.ts = now;
         return geofenceCache.data;
       }
     } catch { /* ignore corrupt cache */ }
@@ -57,8 +65,9 @@ const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
 
   geofenceCache.companyId = companyId;
   geofenceCache.data = data;
+  geofenceCache.ts = now;
   if (data) {
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ office: data.office, radius: data.radius, ts: Date.now() })); } catch { /* ignore */ }
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ office: data.office, radius: data.radius, ts: now })); } catch { /* ignore */ }
   }
   return data;
 };
