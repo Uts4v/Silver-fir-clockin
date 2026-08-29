@@ -37,7 +37,7 @@ import {
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
   Activity, Zap, Award, LayoutDashboard, CreditCard,
   Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
-  Building2, KeyRound, Check,
+  Building2, KeyRound, Check, Image as ImageIcon, Trash2,
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -97,6 +97,31 @@ interface Subscription {
 const CHART_COLORS = ["#818cf8","#34d399","#fbbf24","#f87171","#a78bfa","#38bdf8","#fb923c","#4ade80"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Downscale an uploaded logo to max 256×256 so the data-URL stays well under
+// Firestore's 1MB document limit (PNG keeps transparency; falls back to JPEG).
+function resizeLogo(file: File, max = 256): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { URL.revokeObjectURL(url); reject(new Error("Canvas is not supported")); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      const png = canvas.toDataURL("image/png");
+      resolve(png.length > 800000 ? canvas.toDataURL("image/jpeg", 0.85) : png);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read that image")); };
+    img.src = url;
+  });
+}
 
 function formatTime(s: number) {
   if (!s || s < 0) s = 0;
@@ -177,6 +202,8 @@ const Admin = () => {
   const [radiusMeters,   setRadiusMeters]  = useState("");
   const [locLoading,     setLocLoading]    = useState(false);
   const [savingSettings, setSavingSettings]= useState(false);
+  const [companyLogo,     setCompanyLogo]    = useState("");
+  const [savingLogo,      setSavingLogo]     = useState(false);
 
   // Create-employee form
   const [empFormOpen,    setEmpFormOpen]   = useState(false);
@@ -320,6 +347,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
           setOfficeLabel(c.officeLocation.label || "");
         }
         setRadiusMeters(c.radiusMeters ? String(c.radiusMeters) : "");
+        setCompanyLogo(c.logoUrl || "");
       }
     } catch (err) {
       console.error("Failed to load company:", err);
@@ -364,6 +392,51 @@ const [empDepartment,  setEmpDepartment]  = useState("");
       toast.error("Failed to save settings");
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleLogoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const resized = await resizeLogo(file);
+      setCompanyLogo(resized);
+      toast.success("Logo loaded — press 'Save Logo' to keep it");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to read that image");
+    }
+  };
+
+  const saveCompanyLogo = async () => {
+    if (!company) return;
+    if (!companyLogo.trim()) { toast.error("Choose a logo image first"); return; }
+    setSavingLogo(true);
+    try {
+      await updateDoc(doc(db,"companies",company.id), { logoUrl: companyLogo, updatedAt: Timestamp.now() });
+      setCompany(prev => prev ? { ...prev, logoUrl: companyLogo } : prev);
+      toast.success("Company logo saved");
+    } catch (err) {
+      console.error("Failed to save logo:", err);
+      toast.error("Failed to save logo");
+    } finally {
+      setSavingLogo(false);
+    }
+  };
+
+  const removeCompanyLogo = async () => {
+    if (!company) return;
+    setSavingLogo(true);
+    try {
+      await updateDoc(doc(db,"companies",company.id), { logoUrl: "", updatedAt: Timestamp.now() });
+      setCompanyLogo("");
+      setCompany(prev => prev ? { ...prev, logoUrl: "" } : prev);
+      toast.success("Company logo removed");
+    } catch (err) {
+      console.error("Failed to remove logo:", err);
+      toast.error("Failed to remove logo");
+    } finally {
+      setSavingLogo(false);
     }
   };
 
@@ -1131,6 +1204,51 @@ const [empDepartment,  setEmpDepartment]  = useState("");
                   <p className="text-xs text-white/25">Company not loaded.</p>
                 )}
                 <p className="text-[10px] text-white/18 mt-3">Employees sign up using your company username or invite code.</p>
+              </div>
+
+              {/* Company logo */}
+              <div className="pg rounded-2xl p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(129,140,248,0.12)"}}>
+                    <ImageIcon className="w-4 h-4 text-indigo-400"/>
+                  </div>
+                  <div>
+                    <h3 className="ph text-sm font-semibold text-white">Company Logo</h3>
+                    <p className="text-[9px] text-white/20 mt-0.5">Shown in the top bar on every page for your team</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)"}}>
+                    {companyLogo ? (
+                      <img src={companyLogo} alt="Company logo" className="w-full h-full object-contain"/>
+                    ) : (
+                      <Building2 className="w-6 h-6 text-white/20"/>
+                    )}
+                  </div>
+                  <div className="space-y-2 flex-1">
+                    <label className="inline-flex">
+                      <input type="file" accept="image/*" className="hidden" onChange={handleLogoFile}/>
+                      <span className="inline-flex items-center gap-2 cursor-pointer rounded-xl text-xs px-3 py-2 text-white/70 hover:text-white transition-all" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)"}}>
+                        <ImageIcon className="w-3.5 h-3.5"/>
+                        Choose Image…
+                      </span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <Button type="button" onClick={saveCompanyLogo} disabled={savingLogo || !companyLogo}
+                        className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
+                        {savingLogo ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Save className="w-3.5 h-3.5"/>}
+                        Save Logo
+                      </Button>
+                      {(companyLogo || company?.logoUrl) && (
+                        <Button type="button" variant="outline" onClick={removeCompanyLogo} disabled={savingLogo}
+                          className="rounded-xl text-xs border-white/10 text-rose-400/80 hover:text-rose-300 inline-flex items-center gap-2">
+                          <Trash2 className="w-3.5 h-3.5"/>
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Geo-fence config */}

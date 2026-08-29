@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { useState, useEffect } from "react";
-import { collection, onSnapshot, query, where, or } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, where, or } from "firebase/firestore";
 import { db } from "@/integrations/firebase/client";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -22,6 +22,24 @@ export const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [companyLogoUrl, setCompanyLogoUrl] = useState<string>("");
+
+  // Follow the company doc so the saved company logo appears in the top bar.
+  useEffect(() => {
+    if (!profile?.companyId) {
+      setCompanyLogoUrl("");
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(db, "companies", profile.companyId),
+      (snap) => {
+        const data = snap.data() as { logoUrl?: string } | undefined;
+        setCompanyLogoUrl(data?.logoUrl || "");
+      },
+      (error) => console.error("Error listening to company doc:", error)
+    );
+    return () => unsub();
+  }, [profile?.companyId]);
 
   // Listen for unread notes
   useEffect(() => {
@@ -96,7 +114,7 @@ export const Header = () => {
           onClick={() => navigate("/")}
         >
           <div className="w-9 h-9 text-primary">
-            <img src={logo} alt="Logo" className="w-9 h-9" />
+            <img src={companyLogoUrl || logo} alt="Logo" className="w-9 h-9 object-contain" />
           </div>
           <div className="flex flex-col">
             <span className="font-display text-xl font-semibold text-foreground">

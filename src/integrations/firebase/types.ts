@@ -43,6 +43,7 @@ export interface Company {
   username: string;
   inviteCode: string;
   adminUid: string;
+  logoUrl?: string;
   officeLocation?: OfficeLocation;
   radiusMeters?: number;
   createdAt: Timestamp;
