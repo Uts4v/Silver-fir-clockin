@@ -5,9 +5,10 @@ import { TeaLeafIcon } from "@/components/ui/TeaLeafIcon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useAuthContext } from "@/contexts/AuthContext";
 import { normalizePhone } from "@/hooks/useAuth";
-import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from "firebase/auth";
+import { RecaptchaVerifier, signInWithPhoneNumber, sendPasswordResetEmail, type ConfirmationResult } from "firebase/auth";
 import { auth } from "@/integrations/firebase/client";
 import { toast } from "sonner";
 import {
@@ -49,6 +50,11 @@ const Auth = () => {
   const [phone, setPhone] = useState("");
   const [phonePassword, setPhonePassword] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
+
+  // Forgot password (email reset link)
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
 
   // Phone-OTP join (self sign-up) still uses a 6-digit code.
   const [otp, setOtp] = useState("");
@@ -112,6 +118,23 @@ const Auth = () => {
       toast.error(errMsg(error));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const target = forgotEmail.trim();
+    if (!target) { toast.error("Enter your email"); return; }
+    setForgotBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, target);
+      toast.success("Password reset link sent! Check your email.");
+      setForgotOpen(false);
+      setForgotEmail("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't send reset link. Confirm the email is correct.");
+    } finally {
+      setForgotBusy(false);
     }
   };
 
@@ -415,6 +438,13 @@ const Auth = () => {
                         />
                       </Field>
                       <SubmitButton loading={loading} label="Sign In" />
+                      <button
+                        type="button"
+                        onClick={() => { setForgotEmail(email); setForgotOpen(true); }}
+                        className="w-full text-center text-xs text-muted-foreground hover:text-foreground mt-1"
+                      >
+                        Forgot password?
+                      </button>
                     </motion.form>
                   )}
 
@@ -455,6 +485,13 @@ const Auth = () => {
                         Include your country code and sign in with the password your admin set. No verification code needed.
                       </p>
                       <SubmitButton loading={phoneBusy} label="Sign In" />
+                      <button
+                        type="button"
+                        onClick={() => { setForgotEmail(email); setForgotOpen(true); }}
+                        className="w-full text-center text-xs text-muted-foreground hover:text-foreground mt-1"
+                      >
+                        Forgot password?
+                      </button>
                     </motion.form>
                   )}
                 </div>
@@ -686,6 +723,38 @@ const Auth = () => {
           </div>
         </motion.div>
       </div>
+
+      {/* Forgot password */}
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent className="max-w-md">
+          <div className="text-center mb-4">
+            <h3 className="font-display text-xl font-semibold text-foreground">Reset your password</h3>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Enter your account email and we'll send you a reset link. No SMS code needed.
+            </p>
+          </div>
+          <form onSubmit={handleForgotPassword} className="space-y-4">
+            <Field label="Email" htmlFor="forgot-email" icon={<Mail className="w-4 h-4" />}>
+              <Input
+                id="forgot-email"
+                type="email"
+                placeholder="you@example.com"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                className="pl-10"
+                required
+              />
+            </Field>
+            <Button
+              type="submit"
+              className="w-full tea-button-primary flex items-center justify-center gap-2"
+              disabled={forgotBusy}
+            >
+              {forgotBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Reset Link"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
