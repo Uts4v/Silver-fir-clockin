@@ -13,6 +13,7 @@ import { useLocationCapture } from "@/hooks/useLocation";
 import { toast } from "sonner";
 import { createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence, signOut } from "firebase/auth";
 import { initializeApp, deleteApp } from "firebase/app";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   collection, doc, deleteDoc, getDocs, getDoc, onSnapshot, Timestamp,
   updateDoc, setDoc, query, orderBy, limit, where,
@@ -215,6 +216,12 @@ const Admin = () => {
 const [empDepartment,  setEmpDepartment]  = useState("");
   const [empPhone,       setEmpPhone]       = useState("");
   const [creatingEmp,    setCreatingEmp]   = useState(false);
+
+  // Reset-password dialog
+  const [pwdEmp,         setPwdEmp]         = useState<UserWithStats|null>(null);
+  const [newEmpPwd,      setNewEmpPwd]      = useState("");
+  const [resettingPwd,   setResettingPwd]   = useState(false);
+  const [pwdOpen,        setPwdOpen]        = useState(false);
 
   const { captureLocation } = useLocationCapture();
 
@@ -541,6 +548,24 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     }
   };
 
+  const resetEmployeePassword = async () => {
+    if (!pwdEmp || !newEmpPwd.trim()) return;
+    if (newEmpPwd.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    setResettingPwd(true);
+    try {
+      const call = httpsCallable(getFunctions(), "resetUserPassword");
+      await call({ uid: pwdEmp.id, newPassword: newEmpPwd });
+      toast.success(`Password reset for ${pwdEmp.fullName||pwdEmp.email}`);
+      setPwdOpen(false); setPwdEmp(null); setNewEmpPwd("");
+    } catch (err) {
+      console.error("Failed to reset password:", err);
+      const msg = (err as { message?: string })?.message || "Failed to reset password";
+      toast.error(msg.replace(/^.*resetUserPassword:\s*/, ""));
+    } finally {
+      setResettingPwd(false);
+    }
+  };
+
   const openEmp = async (emp: UserWithStats) => {
     setEmpLoading(true); setSelEmp(emp); setEmpOpen(true);
     const [sessions,prev] = await Promise.all([fetchSessions(emp.id),fetchPrev(emp.id)]);
@@ -776,6 +801,9 @@ const [empDepartment,  setEmpDepartment]  = useState("");
           </button>
           <button onClick={()=>toggleRole(u.id,u.role||"user")} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-indigo-500/15 transition-colors">
             {u.role==="admin"?<ShieldCheck className="w-3.5 h-3.5 text-indigo-400"/>:<Shield className="w-3.5 h-3.5 text-white/22"/>}
+          </button>
+          <button onClick={()=>{setPwdEmp(u); setNewEmpPwd(""); setPwdOpen(true);}} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-sky-500/15 transition-colors" title="Reset password">
+            <KeyRound className="w-3.5 h-3.5 text-sky-400/70 hover:text-sky-300"/>
           </button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -1680,6 +1708,49 @@ const [empDepartment,  setEmpDepartment]  = useState("");
                 className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
                 {creatingEmp ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Check className="w-3.5 h-3.5"/>}
                 Create Employee
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══════════════ RESET PASSWORD MODAL ══════════════ */}
+      <Dialog open={pwdOpen} onOpenChange={setPwdOpen}>
+        <DialogContent className="max-w-md rounded-3xl border border-white/10" style={{background:"#0a0c14"}}>
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(56,189,248,0.13)"}}>
+              <KeyRound className="w-4 h-4 text-sky-400"/>
+            </div>
+            <div>
+              <h3 className="ph font-bold text-white text-sm">Reset Password</h3>
+              <p className="text-[9px] text-white/25 mt-0.5">Set a new password for {pwdEmp?.fullName || pwdEmp?.email || "employee"}</p>
+            </div>
+          </div>
+
+          <form onSubmit={(e)=>{e.preventDefault(); resetEmployeePassword();}} className="space-y-3.5">
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">New Password</Label>
+              <Input
+                required
+                type="text"
+                minLength={6}
+                value={newEmpPwd}
+                onChange={e=>setNewEmpPwd(e.target.value)}
+                placeholder="min 6 characters"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"
+              />
+              <p className="text-[9px] text-white/30 mt-1">Share this new password with the employee so they can sign in.</p>
+            </div>
+
+            <div className="flex items-center gap-2 justify-end pt-2">
+              <Button type="button" variant="outline" onClick={()=>setPwdOpen(false)}
+                className="rounded-xl text-xs border-white/10 text-white/45">
+                Cancel
+              </Button>
+              <Button type="submit" disabled={resettingPwd}
+                className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(56,189,248,0.16)",color:"#7dd3fc",border:"1px solid rgba(56,189,248,0.25)"}}>
+                {resettingPwd ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Check className="w-3.5 h-3.5"/>}
+                Reset Password
               </Button>
             </div>
           </form>
