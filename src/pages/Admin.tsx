@@ -7,13 +7,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuthContext } from "@/contexts/AuthContext";
-import { db, firebaseConfig } from "@/integrations/firebase/client";
+import { db, firebaseConfig, auth as authenticatedAuth } from "@/integrations/firebase/client";
 import { formatTimeShort } from "@/hooks/useWorkSession";
 import { useLocationCapture } from "@/hooks/useLocation";
 import { toast } from "sonner";
-import { createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence, signOut } from "firebase/auth";
+import { createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence, signOut, sendPasswordResetEmail } from "firebase/auth";
 import { initializeApp, deleteApp } from "firebase/app";
-import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   collection, doc, deleteDoc, getDocs, getDoc, onSnapshot, Timestamp,
   updateDoc, setDoc, query, orderBy, limit, where,
@@ -39,7 +38,7 @@ import {
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
   Activity, Zap, Award, LayoutDashboard, CreditCard, Ban, Unlock,
   Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
-  Building2, KeyRound, Check, Image as ImageIcon,
+  Building2, KeyRound, Check, Image as ImageIcon, Mail,
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -219,7 +218,6 @@ const [empDepartment,  setEmpDepartment]  = useState("");
 
   // Reset-password dialog
   const [pwdEmp,         setPwdEmp]         = useState<UserWithStats|null>(null);
-  const [newEmpPwd,      setNewEmpPwd]      = useState("");
   const [resettingPwd,   setResettingPwd]   = useState(false);
   const [pwdOpen,        setPwdOpen]        = useState(false);
 
@@ -549,18 +547,21 @@ const [empDepartment,  setEmpDepartment]  = useState("");
   };
 
   const resetEmployeePassword = async () => {
-    if (!pwdEmp || !newEmpPwd.trim()) return;
-    if (newEmpPwd.length < 6) { toast.error("Password must be at least 6 characters"); return; }
+    if (!pwdEmp) return;
+    // Phone-created employees use a synthetic (non-real) email, so a reset
+    // email can never be delivered to them. Reject those with a clear message.
+    if (pwdEmp.email.startsWith("phone_") && pwdEmp.email.endsWith("@silverfir.app")) {
+      toast.error("This employee has no real email account, so a password reset link cannot be sent. Please delete and recreate the employee with a new password.");
+      return;
+    }
     setResettingPwd(true);
     try {
-      const call = httpsCallable(getFunctions(), "resetUserPassword");
-      await call({ uid: pwdEmp.id, newPassword: newEmpPwd });
-      toast.success(`Password reset for ${pwdEmp.fullName||pwdEmp.email}`);
+      await sendPasswordResetEmail(authenticatedAuth, pwdEmp.email);
+      toast.success(`Password reset email sent to ${pwdEmp.email}`);
       setPwdOpen(false); setPwdEmp(null); setNewEmpPwd("");
     } catch (err) {
-      console.error("Failed to reset password:", err);
-      const msg = (err as { message?: string })?.message || "Failed to reset password";
-      toast.error(msg.replace(/^.*resetUserPassword:\s*/, ""));
+      console.error("Failed to send reset email:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to send reset email. Make sure this account has a real email address.");
     } finally {
       setResettingPwd(false);
     }
@@ -802,7 +803,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
           <button onClick={()=>toggleRole(u.id,u.role||"user")} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-indigo-500/15 transition-colors">
             {u.role==="admin"?<ShieldCheck className="w-3.5 h-3.5 text-indigo-400"/>:<Shield className="w-3.5 h-3.5 text-white/22"/>}
           </button>
-          <button onClick={()=>{setPwdEmp(u); setNewEmpPwd(""); setPwdOpen(true);}} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-sky-500/15 transition-colors" title="Reset password">
+          <button onClick={()=>{setPwdEmp(u); setPwdOpen(true);}} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-sky-500/15 transition-colors" title="Reset password">
             <KeyRound className="w-3.5 h-3.5 text-sky-400/70 hover:text-sky-300"/>
           </button>
           <AlertDialog>
@@ -1723,24 +1724,16 @@ const [empDepartment,  setEmpDepartment]  = useState("");
             </div>
             <div>
               <h3 className="ph font-bold text-white text-sm">Reset Password</h3>
-              <p className="text-[9px] text-white/25 mt-0.5">Set a new password for {pwdEmp?.fullName || pwdEmp?.email || "employee"}</p>
+              <p className="text-[9px] text-white/25 mt-0.5">{pwdEmp?.fullName || pwdEmp?.email || "employee"}</p>
             </div>
           </div>
 
           <form onSubmit={(e)=>{e.preventDefault(); resetEmployeePassword();}} className="space-y-3.5">
-            <div>
-              <Label className="text-[10px] text-white/25 uppercase tracking-widest">New Password</Label>
-              <Input
-                required
-                type="text"
-                minLength={6}
-                value={newEmpPwd}
-                onChange={e=>setNewEmpPwd(e.target.value)}
-                placeholder="min 6 characters"
-                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"
-              />
-              <p className="text-[9px] text-white/30 mt-1">Share this new password with the employee so they can sign in.</p>
-            </div>
+            <p className="text-xs text-white/55 leading-relaxed">
+              A password reset <strong className="text-white/80">link</strong> will be emailed to{" "}
+              <strong className="text-sky-400 break-all">{pwdEmp?.email}</strong>. The employee clicks it to
+              set a new password. This avoids the SMS OTP that can fail in some regions.
+            </p>
 
             <div className="flex items-center gap-2 justify-end pt-2">
               <Button type="button" variant="outline" onClick={()=>setPwdOpen(false)}
@@ -1749,8 +1742,8 @@ const [empDepartment,  setEmpDepartment]  = useState("");
               </Button>
               <Button type="submit" disabled={resettingPwd}
                 className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(56,189,248,0.16)",color:"#7dd3fc",border:"1px solid rgba(56,189,248,0.25)"}}>
-                {resettingPwd ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Check className="w-3.5 h-3.5"/>}
-                Reset Password
+                {resettingPwd ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Mail className="w-3.5 h-3.5"/>}
+                Send Reset Link
               </Button>
             </div>
           </form>
