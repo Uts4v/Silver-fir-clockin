@@ -214,7 +214,6 @@ const Admin = () => {
   const [empPassword,    setEmpPassword]   = useState("");
 const [empDepartment,  setEmpDepartment]  = useState("");
   const [empPhone,       setEmpPhone]       = useState("");
-  const [empCreateMode,  setEmpCreateMode]  = useState<"email"|"phone">("email");
   const [creatingEmp,    setCreatingEmp]   = useState(false);
 
   const { captureLocation } = useLocationCapture();
@@ -449,19 +448,14 @@ const [empDepartment,  setEmpDepartment]  = useState("");
   const createEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!company) { toast.error("Company not loaded"); return; }
+    const phone = normalizePhone(empPhone);
+    if (!empEmail.trim() && !phone) { toast.error("Provide an email or phone number"); return; }
     setCreatingEmp(true);
     try {
-      // Work out the identifier: email for email-mode, synthetic email + phone for phone-mode.
-      // No email/phone verification is required — Firebase creates the account directly.
-      let accountEmail: string;
-      const accountPhone = empCreateMode === "phone" ? normalizePhone(empPhone) : "";
-      if (empCreateMode === "phone") {
-        if (!accountPhone) { toast.error("Phone number is required"); setCreatingEmp(false); return; }
-        accountEmail = syntheticEmailForPhone(accountPhone);
-      } else {
-        if (!empEmail.trim()) { toast.error("Email is required"); setCreatingEmp(false); return; }
-        accountEmail = empEmail.trim();
-      }
+      // Email and phone are both optional — provide at least one. If no email is
+      // given, generate a synthetic one from the phone (matches the app's phone
+      // signup flow). No verification is required; Firebase creates the account directly.
+      const accountEmail = empEmail.trim() || syntheticEmailForPhone(phone);
       // Create the account on an isolated auth instance so the admin's own session
       // is NOT switched to the new employee (createUserWithEmailAndPassword signs in).
       const tmpApp = initializeApp(firebaseConfig, "admin-create-tmp");
@@ -479,7 +473,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
           companyId: company.id,
           companyName: company.name,
           ...(empDepartment.trim() ? { department: empDepartment.trim() } : {}),
-          ...(accountPhone ? { phone: accountPhone } : {}),
+          ...(phone ? { phone } : {}),
           createdAt: Timestamp.now(),
           updatedAt: Timestamp.now(),
         });
@@ -487,7 +481,7 @@ const [empDepartment,  setEmpDepartment]  = useState("");
         try { await signOut(tmpAuth); } catch {}
         try { deleteApp(tmpApp); } catch {}
       }
-      toast.success(`Employee "${empName}" created${empCreateMode === "phone" ? " with phone number" : ""}`);
+      toast.success(`Employee "${empName}" created`);
       setEmpFormOpen(false);
       setEmpName(""); setEmpEmail(""); setEmpPassword(""); setEmpDepartment(""); setEmpPhone("");
       fetchUsers();
@@ -1655,32 +1649,17 @@ const [empDepartment,  setEmpDepartment]  = useState("");
                 className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
             </div>
             <div>
-              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Account Type</Label>
-              <div className="mt-1.5 flex items-center gap-1.5 p-1 rounded-xl border border-white/10 bg-white/[0.03]">
-                <button type="button" onClick={()=>setEmpCreateMode("email")}
-                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${empCreateMode==="email"?"text-white"+" bg-white/10":"text-white/40 hover:text-white/70"}`}>
-                  Email
-                </button>
-                <button type="button" onClick={()=>setEmpCreateMode("phone")}
-                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition ${empCreateMode==="phone"?"text-white"+" bg-white/10":"text-white/40 hover:text-white/70"}`}>
-                  Phone Number
-                </button>
-              </div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Email</Label>
+              <Input type="email" value={empEmail} onChange={e=>setEmpEmail(e.target.value)} placeholder="employee@example.com"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+              <p className="text-[9px] text-white/30 mt-1">Optional if you provide a phone number below</p>
             </div>
-            {empCreateMode === "email" ? (
-              <div>
-                <Label className="text-[10px] text-white/25 uppercase tracking-widest">Email</Label>
-                <Input required type="email" value={empEmail} onChange={e=>setEmpEmail(e.target.value)} placeholder="employee@example.com"
-                  className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
-              </div>
-            ) : (
-              <div>
-                <Label className="text-[10px] text-white/25 uppercase tracking-widest">Phone Number</Label>
-                <Input required value={empPhone} onChange={e=>setEmpPhone(e.target.value)} placeholder="+977 98XXXXXXXX"
-                  className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
-                <p className="text-[9px] text-white/30 mt-1">No verification required — account is created directly.</p>
-              </div>
-            )}
+            <div>
+              <Label className="text-[10px] text-white/25 uppercase tracking-widest">Phone Number</Label>
+              <Input value={empPhone} onChange={e=>setEmpPhone(e.target.value)} placeholder="+977 98XXXXXXXX"
+                className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+              <p className="text-[9px] text-white/30 mt-1">Optional if you provide an email above — no verification required</p>
+            </div>
             <div>
               <Label className="text-[10px] text-white/25 uppercase tracking-widest">Temporary Password</Label>
               <Input required type="text" value={empPassword} onChange={e=>setEmpPassword(e.target.value)} placeholder="min 6 characters"
