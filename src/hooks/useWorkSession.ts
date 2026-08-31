@@ -233,7 +233,7 @@ export const useWorkSession = () => {
         companyId: profile.companyId,
         fullName: profile.fullName,
         department: profile.department || "",
-        updatedAt: Timestamp.now(),
+        updatedAt: serverTimestamp(),
       });
     } catch (err) {
       console.error("Failed to report live status:", err);
