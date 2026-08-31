@@ -17,6 +17,7 @@ interface AuthContextType {
   registerCompany: (input: RegisterCompanyInput) => Promise<AuthResult>;
   signUp: (input: JoinCompanyInput) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
+  signInWithPhone: (phone: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<AuthResult>;
   updateProfile: (updates: Partial<Profile>) => Promise<AuthResult>;

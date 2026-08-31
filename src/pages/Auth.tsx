@@ -44,12 +44,15 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  // Phone-OTP sign in / join
+  // Phone + password login (for admin-created employees). No OTP required.
   const [loginTab, setLoginTab] = useState<"email" | "phone">("email");
   const [phone, setPhone] = useState("");
+  const [phonePassword, setPhonePassword] = useState("");
+  const [phoneBusy, setPhoneBusy] = useState(false);
+
+  // Phone-OTP join (self sign-up) still uses a 6-digit code.
   const [otp, setOtp] = useState("");
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
-  const [phoneBusy, setPhoneBusy] = useState(false);
   const verifierRef = useRef<RecaptchaVerifier | null>(null);
 
   // Register company
@@ -64,7 +67,7 @@ const Auth = () => {
   const [fullName, setFullName] = useState("");
   const [department, setDepartment] = useState("");
 
-  const { signIn, signUp, registerCompany, getProfile, registerPhoneUser, refetchProfile, signOut } = useAuthContext();
+  const { signIn, signInWithPhone, signUp, registerCompany, getProfile, registerPhoneUser, refetchProfile, signOut } = useAuthContext();
   const navigate = useNavigate();
 
   const getPhoneVerifier = () => {
@@ -86,6 +89,7 @@ const Auth = () => {
     setFullName("");
     setDepartment("");
     setPhone("");
+    setPhonePassword("");
     setOtp("");
     setConfirmResult(null);
     setLoginTab("email");
@@ -160,33 +164,14 @@ const Auth = () => {
     }
   };
 
-  const sendLoginCode = async (e: React.FormEvent) => {
+  const handlePhoneLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone.trim()) { toast.error("Enter your phone number"); return; }
+    if (!phonePassword.trim()) { toast.error("Enter your password"); return; }
     setPhoneBusy(true);
     try {
-      const conf = await signInWithPhoneNumber(auth, normalizePhone(phone), getPhoneVerifier());
-      setConfirmResult(conf);
-      toast.success("Verification code sent!");
-    } catch (error) {
-      toast.error(errMsg(error));
-    } finally {
-      setPhoneBusy(false);
-    }
-  };
-
-  const verifyLoginCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!confirmResult || !otp.trim()) return;
-    setPhoneBusy(true);
-    try {
-      const cred = await confirmResult.confirm(otp);
-      const profile = await getProfile(cred.user.uid);
-      if (!profile) {
-        await signOut();
-        throw new Error("No account is linked to this number. New here? Use 'Join Company' and sign up with your phone number.");
-      }
-      await refetchProfile();
+      const { error } = await signInWithPhone(phone, phonePassword);
+      if (error) throw error;
       toast.success("Welcome back!");
       navigate("/");
     } catch (error) {
@@ -436,7 +421,7 @@ const Auth = () => {
                   {loginTab === "phone" && (
                     <motion.form
                       key="login-phone"
-                      onSubmit={confirmResult ? verifyLoginCode : sendLoginCode}
+                      onSubmit={handlePhoneLogin}
                       className="space-y-5"
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -454,35 +439,22 @@ const Auth = () => {
                           required
                         />
                       </Field>
+                      <Field label="Password" htmlFor="login-phone-password" icon={<Lock className="w-4 h-4" />}>
+                        <Input
+                          id="login-phone-password"
+                          type="password"
+                          placeholder="••••••••"
+                          value={phonePassword}
+                          onChange={(e) => setPhonePassword(e.target.value)}
+                          className="pl-10"
+                          required
+                          minLength={6}
+                        />
+                      </Field>
                       <p className="text-[11px] text-muted-foreground -mt-2">
-                        Include your country code. We'll text you a 6-digit code.
+                        Include your country code and sign in with the password your admin set. No verification code needed.
                       </p>
-                      {confirmResult ? (
-                        <>
-                          <Field label="Verification Code" htmlFor="login-otp" icon={<KeyRound className="w-4 h-4" />}>
-                            <Input
-                              id="login-otp"
-                              type="text"
-                              inputMode="numeric"
-                              placeholder="6-digit code"
-                              value={otp}
-                              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                              className="pl-10 tracking-widest"
-                              required
-                            />
-                          </Field>
-                          <SubmitButton loading={phoneBusy} label="Verify &amp; Sign In" />
-                          <button
-                            type="button"
-                            onClick={() => { setConfirmResult(null); setOtp(""); }}
-                            className="w-full text-center text-xs text-muted-foreground hover:text-foreground mt-1"
-                          >
-                            Change number or resend code
-                          </button>
-                        </>
-                      ) : (
-                        <SubmitButton loading={phoneBusy} label="Send Code" />
-                      )}
+                      <SubmitButton loading={phoneBusy} label="Sign In" />
                     </motion.form>
                   )}
                 </div>

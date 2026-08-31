@@ -295,6 +295,24 @@ export const useAuth = () => {
     }
   };
 
+  // Sign in with phone number + password for admin-created employees.
+  // Such accounts use a deterministic synthetic email derived from the phone
+  // number, so we can resolve the account without any OTP or backend lookup.
+  const signInWithPhone = async (phone: string, password: string) => {
+    const normalized = normalizePhone(phone);
+    if (!normalized) return { data: null, error: new Error("Enter your phone number.") };
+    try {
+      const userCredential: UserCredential = await signInWithEmailAndPassword(
+        auth,
+        syntheticEmailForPhone(normalized),
+        password
+      );
+      return { data: userCredential, error: null };
+    } catch (error) {
+      return { data: null, error };
+    }
+  };
+
   const signOut = async () => {
     try {
       await firebaseSignOut(auth);
@@ -356,6 +374,7 @@ export const useAuth = () => {
     registerCompany,
     signUp,
     signIn,
+    signInWithPhone,
     signOut,
     getProfile,
     registerPhoneUser,
