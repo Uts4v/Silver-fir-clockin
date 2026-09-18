@@ -16,3 +16,50 @@ export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return EARTH_RADIUS_METERS * c;
 }
+
+// A single candidate geo-fence site. Matches the CompanySite shape so we can
+// pass Firestore docs straight in without a mapping layer.
+export interface GeoCandidate {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  radiusMeters: number;
+}
+
+export interface GeoMatch {
+  site: GeoCandidate;
+  distanceMeters: number;
+}
+
+// A coordinate fix (lat/lng + reported accuracy in meters).
+export interface GeoFix {
+  lat: number;
+  lng: number;
+  accuracy: number;
+}
+
+/**
+ * Pick the nearest site whose radius the given fix falls inside. A match is only
+ * accepted when the fix is both within the site radius AND accurate enough to be
+ * trusted for that radius (accuracy <= radius). Returns null when no site matches.
+ *
+ * `rejectInaccurate` gates matches on GPS precision; default true.
+ */
+export function findNearestSite(
+  fix: GeoFix,
+  sites: GeoCandidate[],
+  rejectInaccurate = true
+): GeoMatch | null {
+  let best: GeoMatch | null = null;
+  for (const site of sites) {
+    if (!site.radiusMeters || site.radiusMeters <= 0) continue;
+    if (rejectInaccurate && fix.accuracy > site.radiusMeters) continue;
+    const d = distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
+    if (d > site.radiusMeters) continue;
+    if (!best || d < best.distanceMeters) {
+      best = { site, distanceMeters: d };
+    }
+  }
+  return best;
+}

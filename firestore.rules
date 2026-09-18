@@ -35,6 +35,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ── Company geo-fence sites ─────────────────────────────────
+    // Employees read sites to verify safe clock-in; only this company's admins
+    // manage them.
+    match /companies/{companyId}/sites/{siteId} {
+      allow read: if isSignedIn() && !isBlocked() && sameCompany(companyId);
+      allow create, update, delete: if isSignedIn() && !isBlocked() && isAdmin() && sameCompany(companyId);
+    }
+
     // ── Users / profiles ─────────────────────────────────────────
     // Allow users to read/write their own profile
     match /users/{userId} {

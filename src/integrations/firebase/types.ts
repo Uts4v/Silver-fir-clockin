@@ -37,6 +37,18 @@ export interface OfficeLocation {
   capturedAt?: string;
 }
 
+// Geo-fence site document (stored in companies/{companyId}/sites/{siteId})
+export interface CompanySite {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  radiusMeters: number;
+  active: boolean;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
 export interface Company {
   id: string;
   name: string;
@@ -46,6 +58,7 @@ export interface Company {
   logoUrl?: string;
   officeLocation?: OfficeLocation;
   radiusMeters?: number;
+  geofencingEnabled?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -79,7 +92,9 @@ export interface ClockInLocation {
   city: string;
   country: string;
   capturedAt: string; // ISO timestamp when location was captured
-  distanceMeters?: number; // distance from configured office location
+  siteId?: string;        // matched geo-fence site, if any
+  siteName?: string;      // matched site name for display
+  distanceMeters?: number; // distance from nearest matched site / configured office
   inRadius?: boolean;      // whether the fix was inside the configured geo-fence
 }
 

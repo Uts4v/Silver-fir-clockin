@@ -101,7 +101,7 @@ export default function AdminLocationView({ session }: AdminLocationViewProps) {
               ${userName}
             </div>
             <div style="font-size:11px;color:#334155;margin-bottom:6px;">
-              📍 ${loc.label}
+              📍 ${loc.siteName || loc.label}
             </div>
             <div style="font-family:monospace;font-size:10px;color:#94a3b8;">
               ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}
@@ -131,7 +131,8 @@ export default function AdminLocationView({ session }: AdminLocationViewProps) {
     );
   }
 
-  const { lat, lng, label, accuracy, capturedAt } = loc;
+  const { lat, lng, label, siteName, accuracy, capturedAt } = loc;
+  const displayLabel = siteName || label;
   const accuracyLevel = accuracy <= 20 ? "high" : accuracy <= 100 ? "medium" : "low";
   const accuracyStyle = {
     high:   { bg: "#dcfce7", color: "#16a34a" },
@@ -153,8 +154,8 @@ export default function AdminLocationView({ session }: AdminLocationViewProps) {
         </svg>
 
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-foreground truncate leading-tight" title={label}>
-            {label}
+          <p className="text-xs font-semibold text-foreground truncate leading-tight" title={displayLabel}>
+            {displayLabel}
           </p>
           <div className="flex items-center gap-2 mt-1">
             <span
@@ -163,6 +164,9 @@ export default function AdminLocationView({ session }: AdminLocationViewProps) {
             >
               ±{accuracy}m
             </span>
+            {siteName && label !== siteName && (
+              <span className="text-[10px] text-muted-foreground truncate">{label}</span>
+            )}
             {capturedAt && (
               <span className="text-[10px] text-muted-foreground">
                 {new Date(capturedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

@@ -15,7 +15,7 @@ import { createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence, si
 import { initializeApp, deleteApp } from "firebase/app";
 import {
   collection, doc, deleteDoc, getDocs, getDoc, onSnapshot, Timestamp,
-  updateDoc, setDoc, query, orderBy, limit, where,
+  updateDoc, setDoc, addDoc, query, orderBy, limit, where,
 } from "firebase/firestore";
 import { Profile, Company } from "@/integrations/firebase/types";
 import { normalizePhone, syntheticEmailForPhone } from "@/hooks/useAuth";
@@ -38,11 +38,13 @@ import {
   X, Eye, Download, FileText, MapPin, TrendingUp, TrendingDown,
   Activity, Zap, Award, LayoutDashboard, CreditCard, Ban, Unlock,
   Map as MapIcon, Settings as SettingsIcon, UserPlus, Save,
-  Building2, KeyRound, Check, Image as ImageIcon, Mail,
+  Building2, KeyRound, Check, Image as ImageIcon, Mail, Plus,
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area,
@@ -61,6 +63,7 @@ interface WorkSession {
   clockInLocation?: {
     lat: number; lng: number; accuracy: number;
     label: string; fullAddress: string; city: string; country: string; capturedAt: string;
+    siteId?: string; siteName?: string;
   };
 }
 
@@ -91,6 +94,17 @@ interface Subscription {
   id: string; name: string;
   renewed_date?: Timestamp; deadline_date?: Timestamp; renewalDate?: Timestamp;
   cost: number; isActive: boolean;
+}
+
+// Editable geo-fence site draft for the settings form. Numeric fields stay as
+// strings so they can bind directly to <Input> values.
+interface SiteDraft {
+  id: string; // "" until first save creates the Firestore doc
+  name: string;
+  lat: string;
+  lng: string;
+  radius: string;
+  active: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -198,10 +212,8 @@ const Admin = () => {
 
   // Company + settings
   const [company,        setCompany]       = useState<Company|null>(null);
-  const [officeLat,      setOfficeLat]     = useState("");
-  const [officeLng,      setOfficeLng]     = useState("");
-  const [officeLabel,    setOfficeLabel]   = useState("");
-  const [radiusMeters,   setRadiusMeters]  = useState("");
+  const [geoEnabled,     setGeoEnabled]    = useState(false);
+  const [sites,          setSites]         = useState<SiteDraft[]>([]);
   const [locLoading,     setLocLoading]    = useState(false);
   const [savingSettings, setSavingSettings]= useState(false);
   const [companyLogo,     setCompanyLogo]    = useState("");
@@ -348,13 +360,44 @@ const [empDepartment,  setEmpDepartment]  = useState("");
       if (snap.exists()) {
         const c = {id:snap.id,...snap.data()} as Company;
         setCompany(c);
-        if (c.officeLocation) {
-          setOfficeLat(String(c.officeLocation.lat));
-          setOfficeLng(String(c.officeLocation.lng));
-          setOfficeLabel(c.officeLocation.label || "");
-        }
-        setRadiusMeters(c.radiusMeters ? String(c.radiusMeters) : "");
         setCompanyLogo(c.logoUrl || "");
+
+        const sitesSnap = await getDocs(collection(db,"companies",profile.companyId,"sites"));
+        let siteRows: SiteDraft[] = sitesSnap.docs.map(d => {
+          const data = d.data() as { name?: string; lat?: number; lng?: number; radiusMeters?: number; active?: boolean };
+          return {
+            id: d.id,
+            name: data.name || "",
+            lat: data.lat != null ? String(data.lat) : "",
+            lng: data.lng != null ? String(data.lng) : "",
+            radius: data.radiusMeters != null ? String(data.radiusMeters) : "",
+            active: data.active !== false,
+          };
+        });
+
+        // Back-compat: companies configured before multi-site existed get their
+        // single office migrated into the sites list automatically.
+        const hasLegacy = !!(c.officeLocation && c.radiusMeters && c.radiusMeters > 0);
+        if (siteRows.length === 0 && hasLegacy) {
+          const seeded = {
+            name: c.officeLocation!.label || "Office",
+            lat: c.officeLocation!.lat,
+            lng: c.officeLocation!.lng,
+            radiusMeters: c.radiusMeters!,
+            active: true,
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+          };
+          try {
+            const ref = await addDoc(collection(db,"companies",profile.companyId,"sites"), seeded);
+            siteRows = [{ id: ref.id, name: seeded.name, lat: String(seeded.lat), lng: String(seeded.lng), radius: String(seeded.radiusMeters), active: true }];
+          } catch {
+            siteRows = [{ id: "", name: seeded.name, lat: String(seeded.lat), lng: String(seeded.lng), radius: String(seeded.radiusMeters), active: true }];
+          }
+        }
+
+        setGeoEnabled(c.geofencingEnabled === true || (c.geofencingEnabled === undefined && hasLegacy));
+        setSites(siteRows);
       }
     } catch (err) {
       console.error("Failed to load company:", err);
@@ -363,14 +406,35 @@ const [empDepartment,  setEmpDepartment]  = useState("");
 
   useEffect(()=>{ if(!authLoading&&profile?.role==="admin") fetchCompany(); },[authLoading,profile,fetchCompany]);
 
-  const useMyLocation = async () => {
+  const updateSite = (i: number, patch: Partial<SiteDraft>) =>
+    setSites(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
+
+  const addSite = () =>
+    setSites(prev => [...prev, { id: "", name: "", lat: "", lng: "", radius: "", active: true }]);
+
+  const removeSite = async (i: number) => {
+    if (!company) return;
+    const target = sites[i];
+    if (target?.id) {
+      try {
+        await deleteDoc(doc(db,"companies",company.id,"sites",target.id));
+      } catch (err) {
+        console.error("Failed to delete site:", err);
+        toast.error("Failed to delete site");
+        return;
+      }
+    }
+    setSites(prev => prev.filter((_, idx) => idx !== i));
+  };
+
+  const locateSite = async (i: number) => {
     setLocLoading(true);
     try {
       const cap = await captureLocation();
-      setOfficeLat(String(cap.lat));
-      setOfficeLng(String(cap.lng));
-      setOfficeLabel(cap.label);
-      toast.success("Office location set to your current position");
+      setSites(prev => prev.map((s, idx) =>
+        idx === i ? { ...s, lat: String(cap.lat), lng: String(cap.lng), name: s.name || cap.label } : s
+      ));
+      toast.success("Set to your current position — press Save to keep");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to get your location");
     } finally {
@@ -378,25 +442,55 @@ const [empDepartment,  setEmpDepartment]  = useState("");
     }
   };
 
-  const saveCompanySettings = async () => {
+  const toggleGeofencing = async (on: boolean) => {
     if (!company) return;
-    const lat = parseFloat(officeLat);
-    const lng = parseFloat(officeLng);
-    const radius = parseInt(radiusMeters, 10);
-    if (isNaN(lat) || isNaN(lng)) { toast.error("Enter a valid office latitude and longitude"); return; }
-    if (isNaN(radius) || radius <= 0) { toast.error("Enter a valid radius in meters"); return; }
+    const prev = geoEnabled;
+    setGeoEnabled(on);
+    setCompany(prevC => prevC ? { ...prevC, geofencingEnabled: on } : prevC);
+    try {
+      await updateDoc(doc(db,"companies",company.id), { geofencingEnabled: on, updatedAt: Timestamp.now() });
+      toast.success(on ? "Geo-fenced clock-in enabled." : "Geo-fenced clock-in disabled — employees can clock in from anywhere.");
+    } catch (err) {
+      console.error("Failed to update geo-fencing setting:", err);
+      setGeoEnabled(prev);
+      setCompany(prevC => prevC ? { ...prevC, geofencingEnabled: prev } : prevC);
+      toast.error("Failed to update geo-fencing setting");
+    }
+  };
+
+  const saveSites = async () => {
+    if (!company) return;
+    for (const s of sites) {
+      const name = s.name.trim() || "Unnamed site";
+      const lat = parseFloat(s.lat);
+      const lng = parseFloat(s.lng);
+      const radius = parseInt(s.radius, 10);
+      if (isNaN(lat) || isNaN(lng)) { toast.error(`"${name}" needs a valid latitude & longitude`); return; }
+      if (isNaN(radius) || radius <= 0) { toast.error(`"${name}" needs a valid radius in meters`); return; }
+    }
+    if (sites.length === 0) { toast.error("Add at least one site, or turn geo-fencing off"); return; }
     setSavingSettings(true);
     try {
-      await updateDoc(doc(db,"companies",company.id), {
-        officeLocation: { lat, lng, label: officeLabel || "Office", capturedAt: new Date().toISOString() },
-        radiusMeters: radius,
-        updatedAt: Timestamp.now(),
-      });
-      setCompany(prev => prev ? { ...prev, officeLocation: { lat, lng, label: officeLabel || "Office", capturedAt: new Date().toISOString() }, radiusMeters: radius } : prev);
-      toast.success("Office location & radius saved. Clock-in is now geo-fenced.");
+      for (const s of sites) {
+        const payload = {
+          name: s.name.trim() || "Unnamed site",
+          lat: parseFloat(s.lat),
+          lng: parseFloat(s.lng),
+          radiusMeters: parseInt(s.radius, 10),
+          active: s.active,
+          updatedAt: Timestamp.now(),
+        };
+        if (s.id) {
+          await updateDoc(doc(db,"companies",company.id,"sites",s.id), payload);
+        } else {
+          await addDoc(collection(db,"companies",company.id,"sites"), { ...payload, createdAt: Timestamp.now() });
+        }
+      }
+      setCompany(prev => prev ? { ...prev, geofencingEnabled: geoEnabled, updatedAt: Timestamp.now() } : prev);
+      toast.success("Sites saved. Geo-fenced clock-in now applies to all employees.");
     } catch (err) {
-      console.error("Failed to save settings:", err);
-      toast.error("Failed to save settings");
+      console.error("Failed to save sites:", err);
+      toast.error("Failed to save sites");
     } finally {
       setSavingSettings(false);
     }
@@ -1382,57 +1476,82 @@ const [empDepartment,  setEmpDepartment]  = useState("");
 
               {/* Geo-fence config */}
               <div className="pg rounded-2xl p-5">
-                <div className="flex items-center gap-3 mb-4">
+                <div className="flex items-center gap-3 mb-1">
                   <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:"rgba(52,211,153,0.11)"}}>
                     <MapPin className="w-4 h-4 text-emerald-400"/>
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <h3 className="ph text-sm font-semibold text-white">Geo-Fenced Clock-In</h3>
-                    <p className="text-[9px] text-white/20 mt-0.5">Employees can only clock in within this radius of the office</p>
+                    <p className="text-[9px] text-white/20 mt-0.5">Employees can only clock in when inside the radius of a site</p>
                   </div>
+                  <Switch checked={geoEnabled} onCheckedChange={toggleGeofencing}/>
                 </div>
+                <p className="text-[10px] text-white/25 mb-4">
+                  {geoEnabled
+                    ? "On — clock-in is restricted to your sites."
+                    : "Off — employees can clock in from anywhere."}
+                </p>
 
-                <div className="grid sm:grid-cols-2 gap-3 mb-4">
-                  <div>
-                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Latitude</Label>
-                    <Input value={officeLat} onChange={e=>setOfficeLat(e.target.value)} placeholder="27.7172"
-                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
+                {sites.length === 0 ? (
+                  <div className="rounded-xl p-4 text-center text-xs text-white/30 mb-4" style={{background:"rgba(255,255,255,0.03)",border:"1px dashed rgba(255,255,255,0.1)"}}>
+                    No sites yet. Add the construction sites your crews work at.
                   </div>
-                  <div>
-                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Longitude</Label>
-                    <Input value={officeLng} onChange={e=>setOfficeLng(e.target.value)} placeholder="85.3240"
-                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Office Label</Label>
-                    <Input value={officeLabel} onChange={e=>setOfficeLabel(e.target.value)} placeholder="Head Office"
-                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
-                  </div>
-                  <div>
-                    <Label className="text-[10px] text-white/25 uppercase tracking-widest">Allowed Radius (meters)</Label>
-                    <Input value={radiusMeters} onChange={e=>setRadiusMeters(e.target.value)} placeholder="e.g. 300"
-                      type="number" min={1}
-                      className="mt-1.5 bg-transparent border-white/10 text-white text-sm"/>
-                  </div>
-                  <div className="flex items-end">
-                    <Button type="button" onClick={useMyLocation} disabled={locLoading} variant="outline"
-                      className="w-full rounded-xl text-xs border-white/10 text-white/55 hover:text-white">
-                      {locLoading ? "Locating…" : "Use my current location"}
-                    </Button>
-                  </div>
-                </div>
-
-                {company?.officeLocation && (
-                  <div className="text-[10px] text-white/25 mb-4">
-                    Current office: {company.officeLocation.label}{company.radiusMeters ? ` · ${company.radiusMeters}m radius` : ""}
+                ) : (
+                  <div className="space-y-3 mb-4">
+                    {sites.map((s, i) => (
+                      <div key={i} className="rounded-xl p-3 space-y-2" style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>
+                        <div className="flex items-center gap-2">
+                          <Input value={s.name} onChange={e=>updateSite(i,{name:e.target.value})} placeholder="Site name — e.g. Baneshwor Tower Project"
+                            className="flex-1 bg-transparent border-white/10 text-white text-sm"/>
+                          <Button type="button" variant="outline" size="sm" onClick={()=>locateSite(i)} disabled={locLoading}
+                            className="rounded-xl text-[10px] border-white/10 text-white/55 hover:text-white whitespace-nowrap">
+                            {locLoading ? <RefreshCw className="w-3 h-3 animate-spin"/> : <MapPin className="w-3 h-3"/>}
+                            My location
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" onClick={()=>removeSite(i)}
+                            className="rounded-xl text-[10px] border-white/10 text-rose-400/70 hover:text-rose-300 px-2.5">
+                            <Trash2 className="w-3.5 h-3.5"/>
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-[9px] text-white/25 uppercase tracking-widest">Latitude</Label>
+                            <Input value={s.lat} onChange={e=>updateSite(i,{lat:e.target.value})} placeholder="27.7172"
+                              className="mt-1 bg-transparent border-white/10 text-white text-sm"/>
+                          </div>
+                          <div>
+                            <Label className="text-[9px] text-white/25 uppercase tracking-widest">Longitude</Label>
+                            <Input value={s.lng} onChange={e=>updateSite(i,{lng:e.target.value})} placeholder="85.3240"
+                              className="mt-1 bg-transparent border-white/10 text-white text-sm"/>
+                          </div>
+                          <div>
+                            <Label className="text-[9px] text-white/25 uppercase tracking-widest">Radius (meters)</Label>
+                            <Input value={s.radius} onChange={e=>updateSite(i,{radius:e.target.value})} placeholder="e.g. 300"
+                              type="number" min={1}
+                              className="mt-1 bg-transparent border-white/10 text-white text-sm"/>
+                          </div>
+                          <label className="flex items-end gap-2 pb-1 cursor-pointer select-none">
+                            <Checkbox checked={s.active} onCheckedChange={v=>updateSite(i,{active:!!v})}/>
+                            <span className="text-[10px] text-white/40">Active</span>
+                          </label>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                <Button type="button" onClick={saveCompanySettings} disabled={savingSettings}
-                  className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
-                  {savingSettings ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Save className="w-3.5 h-3.5"/>}
-                  Save Settings
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" onClick={addSite}
+                    className="rounded-xl text-xs border-white/10 text-white/55 hover:text-white inline-flex items-center gap-1.5">
+                    <Plus className="w-3.5 h-3.5"/>
+                    Add site
+                  </Button>
+                  <Button type="button" onClick={saveSites} disabled={savingSettings}
+                    className="rounded-xl text-xs inline-flex items-center gap-2" style={{background:"rgba(99,102,241,0.16)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,0.25)"}}>
+                    {savingSettings ? <RefreshCw className="w-3.5 h-3.5 animate-spin"/> : <Save className="w-3.5 h-3.5"/>}
+                    Save Sites
+                  </Button>
+                </div>
               </div>
             </motion.div>
           )}

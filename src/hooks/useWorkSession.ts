@@ -19,22 +19,26 @@ import { db } from "@/integrations/firebase/client";
 import { useAuthContext } from "@/contexts/AuthContext";
 import type { TimerStatus, WorkSession, BreakLog, ClockInLocation, OfficeLocation } from "@/integrations/firebase/types";
 import { toast } from "sonner";
-import { useLocationCapture, getCoords, reverseGeocode } from "@/hooks/useLocation";  // new hook for geolocation
-import { distanceMeters } from "@/lib/geo";
+import { useLocationCapture, getCoords, reverseGeocode } from "@/hooks/useLocation";
+import { distanceMeters, findNearestSite, type GeoCandidate } from "@/lib/geo";
 
 // ── Company geo-fence cache ────────────────────────────────────────────────
-// Cached in memory + localStorage so clock-in never waits on a companies/{id}
-// read for every attempt. A configured geo-fence is trusted for 1h; a *missing*
-// one is re-checked after 60s so a freshly-saved office/radius is picked up fast.
-interface GeofenceInfo { office: OfficeLocation; radius: number }
+// Cached in memory + localStorage so clock-in never waits on companies/{id} /
+// sites reads for every attempt. An *enabled* fence with sites is trusted for
+// 1h; a disabled/missing one is re-checked after 60s so a freshly-saved site or
+// master toggle is picked up fast.
+interface GeofenceSites { enabled: boolean; sites: GeoCandidate[] }
 const GEOFENCE_TTL = 60 * 60 * 1000;
 const GEOFENCE_NULL_TTL = 60 * 1000;
-const geofenceCache: { companyId: string; data: GeofenceInfo | null; ts: number } = { companyId: "", data: null, ts: 0 };
+const geofenceCache: { companyId: string; data: GeofenceSites | null; ts: number } = { companyId: "", data: null, ts: 0 };
 
-const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
+const getGeofenceSites = async (companyId: string): Promise<GeofenceSites | null> => {
   const now = Date.now();
   if (geofenceCache.companyId === companyId) {
-    const ttl = geofenceCache.data ? GEOFENCE_TTL : GEOFENCE_NULL_TTL;
+    const ttl =
+      geofenceCache.data && geofenceCache.data.enabled && geofenceCache.data.sites.length > 0
+        ? GEOFENCE_TTL
+        : GEOFENCE_NULL_TTL;
     if (now - geofenceCache.ts < ttl) return geofenceCache.data;
   }
 
@@ -43,21 +47,46 @@ const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
   if (cached) {
     try {
       const p = JSON.parse(cached);
-      if (p && p.office && p.radius != null && now - p.ts < GEOFENCE_TTL) {
+      if (p && typeof p.enabled === "boolean" && Array.isArray(p.sites) && now - p.ts < GEOFENCE_TTL) {
         geofenceCache.companyId = companyId;
-        geofenceCache.data = { office: p.office, radius: p.radius };
+        geofenceCache.data = { enabled: p.enabled, sites: p.sites };
         geofenceCache.ts = now;
         return geofenceCache.data;
       }
     } catch { /* ignore corrupt cache */ }
   }
 
-  let data: GeofenceInfo | null = null;
+  let data: GeofenceSites | null = null;
   try {
     const compSnap = await getDoc(doc(db, "companies", companyId));
     if (compSnap.exists()) {
-      const comp = compSnap.data() as { officeLocation?: OfficeLocation; radiusMeters?: number };
-      if (comp.officeLocation && comp.radiusMeters) data = { office: comp.officeLocation, radius: comp.radiusMeters };
+      const comp = compSnap.data() as {
+        officeLocation?: OfficeLocation;
+        radiusMeters?: number;
+        geofencingEnabled?: boolean;
+      };
+      const hasLegacy = !!(comp.officeLocation && comp.radiusMeters && comp.radiusMeters > 0);
+      // Companies configured before the master toggle existed keep geo-fencing on.
+      let enabled = comp.geofencingEnabled === true;
+      if (comp.geofencingEnabled === undefined && hasLegacy) enabled = true;
+
+      const sitesSnap = await getDocs(collection(db, "companies", companyId, "sites"));
+      let sites: GeoCandidate[] = sitesSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }) as GeoCandidate & { active?: boolean })
+        .filter(s => s.active !== false && s.radiusMeters > 0);
+
+      // Back-compat: a configured single office behaves as one implicit site.
+      if (enabled && sites.length === 0 && hasLegacy) {
+        sites = [{
+          id: "legacy-office",
+          name: comp.officeLocation!.label || "Office",
+          lat: comp.officeLocation!.lat,
+          lng: comp.officeLocation!.lng,
+          radiusMeters: comp.radiusMeters!,
+        }];
+      }
+
+      data = enabled ? { enabled: true, sites } : { enabled: false, sites: [] };
     }
   } catch (err) {
     console.error("Failed to load company geofence:", err);
@@ -67,10 +96,25 @@ const getGeofence = async (companyId: string): Promise<GeofenceInfo | null> => {
   geofenceCache.data = data;
   geofenceCache.ts = now;
   if (data) {
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ office: data.office, radius: data.radius, ts: now })); } catch { /* ignore */ }
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ enabled: data.enabled, sites: data.sites, ts: now })); } catch { /* ignore */ }
   }
   return data;
 };
+
+// Turn a failed geo check into a helpful block message.
+function buildGeoError(coords: { lat: number; lng: number; accuracy: number }, sites: GeoCandidate[]): string {
+  let nearest: GeoCandidate | null = null;
+  let minDist = Infinity;
+  for (const s of sites) {
+    const d = distanceMeters(coords.lat, coords.lng, s.lat, s.lng);
+    if (d < minDist) { minDist = d; nearest = s; }
+  }
+  if (!nearest) return "No work sites are configured for your company. Ask an admin to add one.";
+  if (minDist <= nearest.radiusMeters) {
+    return `Your GPS accuracy is ${Math.round(coords.accuracy)}m — too imprecise to verify you are at "${nearest.name}" (allowed ${nearest.radiusMeters}m). Move to open sky and retry.`;
+  }
+  return `You are ${Math.round(minDist)}m from "${nearest.name}" (clock-in allowed within ${nearest.radiusMeters}m of a site).`;
+}
 
 export const useWorkSession = () => {
   const { user, profile } = useAuthContext();
@@ -251,22 +295,20 @@ export const useWorkSession = () => {
   }, [session?.status, user, reportLive]);
 
   // Enrich a verified fix with a reverse-geocoded address in the background so
-  // a slow Nominatim call never blocks clock-in.
-  const enrichLocation = useCallback(async (sessionId: string, lat: number, lng: number) => {
+  // a slow Nominatim call never blocks clock-in. Site/distance fields are kept.
+  const enrichLocation = useCallback(async (sessionId: string, base: ClockInLocation) => {
     if (!user) return;
     const uid = user.uid;
     try {
-      const geo = await reverseGeocode(lat, lng);
-      const fullLoc = {
-        lat,
-        lng,
-        accuracy: 0,
+      const geo = await reverseGeocode(base.lat, base.lng);
+      const fullLoc: ClockInLocation = {
+        ...base,
         label: geo.label,
         fullAddress: geo.fullAddress,
         city: geo.city,
         country: geo.country,
-        capturedAt: new Date().toISOString(),
-      } as ClockInLocation;
+        capturedAt: base.capturedAt,
+      };
       await updateDoc(
         doc(db, "users", uid, "sessions", sessionId),
         { clockInLocation: fullLoc, updatedAt: Timestamp.now() } as unknown as Parameters<typeof updateDoc>[1]
@@ -287,40 +329,46 @@ export const useWorkSession = () => {
     try {
       // Resolve the company's geo-fence while simultaneously grabbing a fast
       // geolocation fix — the reads overlap instead of serialising.
-      let geofence: GeofenceInfo | null = null;
+      let geofence: GeofenceSites | null = null;
       let coordsPromise: Promise<{ lat: number; lng: number; accuracy: number } | null> = Promise.resolve(null);
 
       if (profile?.companyId) {
         coordsPromise = getCoords();
-        geofence = await getGeofence(profile.companyId);
+        geofence = await getGeofenceSites(profile.companyId);
       }
 
       let locationData: ClockInLocation | null = null;
-      if (geofence) {
-        toast.info("Verifying your office location…");
+      if (geofence?.enabled) {
+        toast.info("Verifying your work-site location…");
         const coords = await coordsPromise;
         if (!coords) {
           toast.error("Could not determine your location. Please allow location access and retry.");
           return false;
         }
-        const dist = distanceMeters(coords.lat, coords.lng, geofence.office.lat, geofence.office.lng);
-        if (dist > geofence.radius) {
-          toast.error(
-            `You are ${Math.round(dist)}m away from the office. ` +
-            `Clock-in is only allowed within ${geofence.radius}m.`
-          );
+
+        // Auto-match the nearest site whose radius covers the fix. A fix is only
+        // accepted when GPS precision is good enough to trust for that radius.
+        const match = findNearestSite(
+          { lat: coords.lat, lng: coords.lng, accuracy: coords.accuracy },
+          geofence.sites
+        );
+        if (!match) {
+          toast.error(buildGeoError(coords, geofence.sites));
           return false;
         }
+
         locationData = {
           lat: coords.lat,
           lng: coords.lng,
           accuracy: Math.round(coords.accuracy),
-          label: "",
+          label: match.site.name,
           fullAddress: "",
           city: "",
           country: "",
           capturedAt: new Date().toISOString(),
-          distanceMeters: Math.round(dist),
+          siteId: match.site.id,
+          siteName: match.site.name,
+          distanceMeters: Math.round(match.distanceMeters),
           inRadius: true,
         };
       }
@@ -374,7 +422,7 @@ export const useWorkSession = () => {
         } catch (locErr) {
           console.error("Failed to attach location:", locErr);
         }
-        void enrichLocation(newSession.id, locationData.lat, locationData.lng);
+        void enrichLocation(newSession.id, locationData);
         return true;
       }
 
