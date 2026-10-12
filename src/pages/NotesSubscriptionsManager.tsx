@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { notifyNoteSent } from "@/integrations/notifications";
+import { notifyNoteSent, recordRead } from "@/integrations/notifications";
 
 interface Note {
   id: string;
@@ -24,7 +24,14 @@ interface Note {
   subject: string;
   message: string;
   priority: "low" | "normal" | "high";
-  isRead: boolean;
+  /** uid -> timestamp. Source of truth for per-person read state. */
+  readBy?: Record<string, unknown>;
+  /** Links to the canonical sentNotifications/{id} doc used for admin read counts. */
+  notificationId?: string;
+  /** How many people this was addressed to, for the "X of Y read" count. */
+  recipientCount?: number;
+  /** Legacy shared flag, kept only for docs written before readBy existed. */
+  isRead?: boolean;
   createdAt: any;
   updatedAt: any;
 }
@@ -53,6 +60,17 @@ interface User {
 
 export default function NotesSubscriptionsManager() {
   const { user, profile } = useAuthContext();
+
+  /** True when the current user has a note addressed to them and has not opened
+   *  it. `readBy` is per-person, so one reader never clears it for the rest. */
+  const isUnreadForMe = (n: Note) => {
+    if (!user) return false;
+    if (n.recipientId !== user.uid && n.recipientId !== "all") return false;
+    if (n.readBy && typeof n.readBy === "object") return !n.readBy[user.uid];
+    // Notes written before readBy existed still carry the old shared flag.
+    return !n.isRead;
+  };
+
   const [notes, setNotes] = useState<Note[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -87,9 +105,13 @@ export default function NotesSubscriptionsManager() {
     console.log("fetchData: starting fetch for user", user.uid, "with role", profile.role);
     setLoading(true);
     try {
-      // Fetch users (if admin)
-      if (profile?.role === "admin") {
-        const usersSnapshot = await getDocs(collection(db, "users"));
+      // Fetch users (if admin). Scoped to this company - reading the whole
+      // collection leaked other tenants' names into the recipient picker and
+      // inflated broadcast recipientCount.
+      if (profile?.role === "admin" && profile.companyId) {
+        const usersSnapshot = await getDocs(
+          query(collection(db, "users"), where("companyId", "==", profile.companyId))
+        );
         setUsers(usersSnapshot.docs.map(doc => ({
           id: doc.id,
           fullName: doc.data().fullName,
@@ -173,8 +195,14 @@ export default function NotesSubscriptionsManager() {
 
     try {
       const recipient = users.find(u => u.id === noteRecipient);
-      
-      await addDoc(collection(db, "notes"), {
+
+      // Pre-allocate the canonical send ID so the note doc can point at it.
+      // Reading the note in the Notes page then writes the read receipt to the
+      // same `sentNotifications` doc the admin counts, so "notes read" and
+      // "bell alert read" are one number rather than two.
+      const notificationId = doc(collection(db, "sentNotifications")).id;
+
+      const noteRef = await addDoc(collection(db, "notes"), {
         senderId: user.uid,
         senderName: profile?.fullName || "Unknown",
         recipientId: noteRecipient,
@@ -182,7 +210,12 @@ export default function NotesSubscriptionsManager() {
         subject: noteSubject,
         message: noteMessage,
         priority: notePriority,
-        isRead: false,
+        // Per-person read state. The old shared `isRead` flag meant the first
+        // reader marked a broadcast read for everyone, so it is no longer used
+        // for unread detection - `readBy` is the source of truth.
+        readBy: {},
+        notificationId,
+        recipientCount: noteRecipient === "all" ? users.length : 1,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now()
       });
@@ -193,39 +226,48 @@ export default function NotesSubscriptionsManager() {
       setNotePriority("normal");
       setNoteDialogOpen(false);
 
-      notifyNoteSent({
+      // Awaited: the send must exist before readers can log receipts against it,
+      // and a failure here should not be silently swallowed.
+      await notifyNoteSent({
         recipientId: noteRecipient,
-        companyId: profile?.companyId,
+        companyId: profile?.companyId || "",
+        senderId: user.uid,
         senderName: profile?.fullName || "Unknown",
         subject: noteSubject,
+        notificationId,
       });
 
+      void noteRef;
       await fetchData();
     } catch (error) {
       console.error("Error sending note:", error);
     }
   };
 
+  // Records *this* user's read receipt. Previously it flipped a shared `isRead`
+  // flag, which meant one person opening a broadcast marked it read for
+  // everyone and the sender could never tell who had actually seen it.
   const markAsRead = async (noteId: string) => {
+    if (!user) return;
+    const note = notes.find(n => n.id === noteId);
+    if (!note || !isUnreadForMe(note)) return;
     try {
-      console.log("markAsRead: attempting to mark note as read", noteId);
-      console.log("markAsRead: current user", user?.uid);
-
-      const noteToUpdate = notes.find(n => n.id === noteId);
-      console.log("markAsRead: note to update", noteToUpdate);
-
-      if (!noteToUpdate) {
-        console.error("markAsRead: note not found");
-        return;
-      }
-
-      console.log("markAsRead: note recipientId", noteToUpdate.recipientId);
-
+      const now = Timestamp.now();
       await updateDoc(doc(db, "notes", noteId), {
-        isRead: true,
-        updatedAt: Timestamp.now()
+        [`readBy.${user.uid}`]: now,
+        updatedAt: now
       });
-      console.log("markAsRead: successfully updated note");
+      // Mirror the receipt onto the canonical send so the admin's read count
+      // reflects a note opened in the Notes page, not just the bell. Notes
+      // written before this correlation existed have no notificationId, so the
+      // note's own readBy remains the only record for them.
+      if (note.notificationId && profile?.companyId) {
+        await recordRead({
+          uid: user.uid,
+          notificationId: note.notificationId,
+          companyId: profile.companyId,
+        });
+      }
       await fetchData();
     } catch (error) {
       console.error("Error marking note as read:", error);
@@ -457,7 +499,7 @@ export default function NotesSubscriptionsManager() {
           <TabsList className="w-full flex flex-col sm:flex-row">
             <TabsTrigger value="announcements" className="w-full sm:w-auto justify-start sm:justify-center">
               <Bell className="h-4 w-4 mr-2" />
-              Announcements ({notes.filter(n => !n.isRead && (n.recipientId === user?.uid || n.recipientId === "all")).length})
+              Announcements ({notes.filter(n => isUnreadForMe(n)).length})
             </TabsTrigger>
             {profile?.role === "admin" && (
             <TabsTrigger value="subscriptions" className="w-full sm:w-auto justify-start sm:justify-center">
@@ -477,7 +519,7 @@ export default function NotesSubscriptionsManager() {
               </Card>
             ) : (
               notes.map(note => (
-                <Card key={note.id} className={!note.isRead && (note.recipientId === user?.uid || note.recipientId === "all") ? "border-primary" : ""}>
+                <Card key={note.id} className={isUnreadForMe(note) ? "border-primary" : ""}>
                   <CardHeader>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1">
@@ -486,7 +528,7 @@ export default function NotesSubscriptionsManager() {
                           <Badge variant={getPriorityColor(note.priority)}>
                             {note.priority}
                           </Badge>
-                          {!note.isRead && (note.recipientId === user?.uid || note.recipientId === "all") && (
+                          {isUnreadForMe(note) && (
                             <Badge variant="default">New</Badge>
                           )}
                         </div>
@@ -498,7 +540,7 @@ export default function NotesSubscriptionsManager() {
                         </CardDescription>
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        {!note.isRead && (note.recipientId === user?.uid || note.recipientId === "all") && (
+                        {isUnreadForMe(note) && (
                           <Button
                             size="sm"
                             variant="outline"

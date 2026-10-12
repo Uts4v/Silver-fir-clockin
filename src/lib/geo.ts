@@ -18,7 +18,9 @@ export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
 }
 
 // A single candidate geo-fence site. Matches the CompanySite shape so we can
-// pass Firestore docs straight in without a mapping layer.
+// pass Firestore docs straight in without a mapping layer. `radiusMeters` is the
+// *effective* radius — per-outlet overrides already resolved against the
+// company default by `resolveRadii`.
 export interface GeoCandidate {
   id: string;
   name: string;
@@ -37,6 +39,27 @@ export interface GeoFix {
   lat: number;
   lng: number;
   accuracy: number;
+}
+
+/**
+ * Resolve the clock-in radius for each outlet.
+ *
+ * An admin configures one company-wide default that covers every outlet, and may
+ * override it per location. A location with its own positive radius keeps it;
+ * everything else inherits the default. A non-positive default is ignored so
+ * locations keep whatever they already had.
+ */
+export function resolveRadii(
+  sites: Array<GeoCandidate & { radiusMeters?: number }>,
+  defaultRadiusMeters: number
+): GeoCandidate[] {
+  return sites.map(s => ({
+    ...s,
+    radiusMeters:
+      typeof s.radiusMeters === "number" && s.radiusMeters > 0
+        ? s.radiusMeters
+        : defaultRadiusMeters,
+  }));
 }
 
 /**

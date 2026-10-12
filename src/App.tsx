@@ -11,37 +11,54 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { PresenceReporter } from "@/hooks/usePresence";
+import { lazy, Suspense } from "react";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
-import Profile from "./pages/Profile";
-import History from "./pages/History";
-import Admin from "./pages/Admin";
-import LeaveRequests from "./pages/LeaveRequests";
 import NotFound from "./pages/NotFound";
-import NotesSubscriptionsManager from "./pages/NotesSubscriptionsManager";
-import { InstallBanner } from "@/components/InstallApp";
+import { InstallBanner } from "./components/InstallApp";
+
+// Only the landing + auth screens load in the initial bundle. The admin console
+// alone is ~1900 lines plus charts, maps and export code, so employees should
+// never pay for it; each heavy route is fetched the first time it is opened.
+const Profile = lazy(() => import("./pages/Profile"));
+const History = lazy(() => import("./pages/History"));
+const Admin = lazy(() => import("./pages/Admin"));
+const LeaveRequests = lazy(() => import("./pages/LeaveRequests"));
+const NotesSubscriptionsManager = lazy(() => import("./pages/NotesSubscriptionsManager"));
 
 const queryClient = new QueryClient();
+
+// Shown while a route chunk is in flight. Deliberately minimal so it paints
+// instantly and does not shift layout.
+const RouteFallback = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="w-6 h-6 rounded-full border-2 border-primary/25 border-t-primary animate-spin" />
+  </div>
+);
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider defaultTheme="system" storageKey="tea-tracker-theme">
       <TooltipProvider>
         <AuthProvider>
+          <PresenceReporter />
           <Toaster />
           <Sonner />
           <InstallBanner />
           <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/notes" element={<NotesSubscriptionsManager />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/leaves" element={<LeaveRequests />} />
-              <Route path="/admin" element={<Admin />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/notes" element={<NotesSubscriptionsManager />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/leaves" element={<LeaveRequests />} />
+                <Route path="/admin" element={<Admin />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
           </BrowserRouter>
         </AuthProvider>
       </TooltipProvider>

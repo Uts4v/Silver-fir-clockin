@@ -2,35 +2,47 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   doc,
   getDoc,
-  setDoc,
   updateDoc,
   collection,
   query,
   where,
   getDocs,
   addDoc,
-  deleteDoc,
   orderBy,
-  serverTimestamp,
-  Timestamp,
-  writeBatch
+  Timestamp
 } from "firebase/firestore";
+import type { DocumentData, UpdateData } from "firebase/firestore";
 import { db } from "@/integrations/firebase/client";
 import { useAuthContext } from "@/contexts/AuthContext";
 import type { TimerStatus, WorkSession, BreakLog, ClockInLocation, OfficeLocation } from "@/integrations/firebase/types";
+
+// Re-exported so dashboard components can `import type { TimerStatus }` from
+// this hook without reaching into the Firebase types module directly.
+export type { TimerStatus };
 import { toast } from "sonner";
 import { useLocationCapture, getCoords, reverseGeocode } from "@/hooks/useLocation";
-import { distanceMeters, findNearestSite, type GeoCandidate } from "@/lib/geo";
+import { distanceMeters, findNearestSite, resolveRadii, type GeoCandidate } from "@/lib/geo";
 
 // ── Company geo-fence cache ────────────────────────────────────────────────
 // Cached in memory + localStorage so clock-in never waits on companies/{id} /
 // sites reads for every attempt. An *enabled* fence with sites is trusted for
-// 1h; a disabled/missing one is re-checked after 60s so a freshly-saved site or
-// master toggle is picked up fast.
+// 5 minutes (short enough that a radius/outlet change reaches every device
+// quickly); a disabled/missing one is re-checked after 60s so a freshly-saved
+// site or master toggle is picked up fast.
 interface GeofenceSites { enabled: boolean; sites: GeoCandidate[] }
-const GEOFENCE_TTL = 60 * 60 * 1000;
+const GEOFENCE_TTL = 5 * 60 * 1000;
 const GEOFENCE_NULL_TTL = 60 * 1000;
 const geofenceCache: { companyId: string; data: GeofenceSites | null; ts: number } = { companyId: "", data: null, ts: 0 };
+
+// Called after an admin edits outlets/radius so the next clock-in re-reads the
+// fence instead of trusting a stale cached copy.
+export function invalidateGeofenceCache(companyId: string) {
+  if (geofenceCache.companyId === companyId) {
+    geofenceCache.ts = 0;
+    geofenceCache.data = null;
+  }
+  try { localStorage.removeItem("sf_geofence_" + companyId); } catch { /* ignore */ }
+}
 
 const getGeofenceSites = async (companyId: string): Promise<GeofenceSites | null> => {
   const now = Date.now();
@@ -58,11 +70,18 @@ const getGeofenceSites = async (companyId: string): Promise<GeofenceSites | null
 
   let data: GeofenceSites | null = null;
   try {
-    const compSnap = await getDoc(doc(db, "companies", companyId));
-    if (compSnap.exists()) {
+    // Both reads are independent — fire them together so a cold cache costs one
+      // round trip instead of two chained ones.
+      const [compSnap, sitesSnap] = await Promise.all([
+        getDoc(doc(db, "companies", companyId)),
+        getDocs(collection(db, "companies", companyId, "sites")),
+      ]);
+
+      if (compSnap.exists()) {
       const comp = compSnap.data() as {
         officeLocation?: OfficeLocation;
         radiusMeters?: number;
+        siteRadiusMeters?: number;
         geofencingEnabled?: boolean;
       };
       const hasLegacy = !!(comp.officeLocation && comp.radiusMeters && comp.radiusMeters > 0);
@@ -70,23 +89,36 @@ const getGeofenceSites = async (companyId: string): Promise<GeofenceSites | null
       let enabled = comp.geofencingEnabled === true;
       if (comp.geofencingEnabled === undefined && hasLegacy) enabled = true;
 
-      const sitesSnap = await getDocs(collection(db, "companies", companyId, "sites"));
-      let sites: GeoCandidate[] = sitesSnap.docs
-        .map(d => ({ id: d.id, ...d.data() }) as GeoCandidate & { active?: boolean })
-        .filter(s => s.active !== false && s.radiusMeters > 0);
+      // One radius is shared by every outlet of the company, with an optional
+      // per-outlet override. The company default fills in every outlet that has
+      // no radius of its own, so admins can set one value and tune single spots.
+      const defaultRadius =
+        comp.siteRadiusMeters && comp.siteRadiusMeters > 0
+          ? comp.siteRadiusMeters
+          : comp.radiusMeters && comp.radiusMeters > 0
+            ? comp.radiusMeters
+            : 0;
+
+      const sites: GeoCandidate[] = resolveRadii(
+        sitesSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }) as GeoCandidate & { active?: boolean })
+          .filter(s => s.active !== false),
+        defaultRadius
+      ).filter(s => s.radiusMeters > 0);
 
       // Back-compat: a configured single office behaves as one implicit site.
-      if (enabled && sites.length === 0 && hasLegacy) {
-        sites = [{
+      let effectiveSites = sites;
+      if (enabled && effectiveSites.length === 0 && hasLegacy) {
+        effectiveSites = [{
           id: "legacy-office",
           name: comp.officeLocation!.label || "Office",
           lat: comp.officeLocation!.lat,
           lng: comp.officeLocation!.lng,
-          radiusMeters: comp.radiusMeters!,
+          radiusMeters: defaultRadius > 0 ? defaultRadius : comp.radiusMeters!,
         }];
       }
 
-      data = enabled ? { enabled: true, sites } : { enabled: false, sites: [] };
+      data = enabled ? { enabled: true, sites: effectiveSites } : { enabled: false, sites: [] };
     }
   } catch (err) {
     console.error("Failed to load company geofence:", err);
@@ -113,7 +145,7 @@ function buildGeoError(coords: { lat: number; lng: number; accuracy: number }, s
   if (minDist <= nearest.radiusMeters) {
     return `Your GPS accuracy is ${Math.round(coords.accuracy)}m — too imprecise to verify you are at "${nearest.name}" (allowed ${nearest.radiusMeters}m). Move to open sky and retry.`;
   }
-  return `You are ${Math.round(minDist)}m from "${nearest.name}" (clock-in allowed within ${nearest.radiusMeters}m of a site).`;
+  return `You are ${Math.round(minDist)}m from the nearest outlet "${nearest.name}". Clock-in is only allowed within ${nearest.radiusMeters}m of one of your ${sites.length} outlet${sites.length === 1 ? "" : "s"}.`;
 }
 
 export const useWorkSession = () => {
@@ -126,23 +158,36 @@ export const useWorkSession = () => {
   const [isBreakAlertPlaying, setIsBreakAlertPlaying] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const beepIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const playBreakAlert = useCallback(() => {
+    // One shared AudioContext for the whole session — creating a new context
+    // every second leaks them (browsers cap the number and start failing).
     const playBeep = () => {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
+      try {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        const audioContext = audioContextRef.current;
+        if (audioContext.state === "suspended") void audioContext.resume();
 
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
 
-      oscillator.frequency.value = 800; // 800 Hz beep
-      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime); // Volume
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
 
-      oscillator.start(audioContext.currentTime);
-      oscillator.stop(audioContext.currentTime + 0.5); // 0.5 second beep
+        oscillator.frequency.value = 800; // 800 Hz beep
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime); // Volume
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5); // 0.5 second beep
+      } catch {
+        /* audio unavailable — the visual alert still applies */
+      }
     };
 
+    playBeep();
     // Play beep every second
     beepIntervalRef.current = setInterval(playBeep, 1000);
   }, []);
@@ -240,7 +285,7 @@ export const useWorkSession = () => {
       setBreakDisplayTime(times.break);
 
       // Break alert: if on break and break time >= 45 minutes (2700 seconds)
-      if (session?.status === "break" && times.break >= 4 && !isBreakAlertPlaying) {
+      if (session?.status === "break" && times.break >= 45 * 60 && !isBreakAlertPlaying) {
         playBreakAlert();
         setIsBreakAlertPlaying(true);
       } else if (session?.status !== "break" && isBreakAlertPlaying) {
@@ -266,33 +311,8 @@ export const useWorkSession = () => {
 
   const { captureLocation } = useLocationCapture();
 
-  // ── Realtime presence ─────────────────────────────────────────────────────
-  // Writes a lightweight liveStatus/{uid} doc on every status transition so the
-  // admin panel can subscribe and show Working / Break / Offline instantly.
-  const reportLive = useCallback(async (s: TimerStatus | "offline") => {
-    if (!user || !profile?.companyId) return;
-    try {
-      await setDoc(doc(db, "liveStatus", user.uid), {
-        status: s,
-        companyId: profile.companyId,
-        fullName: profile.fullName,
-        department: profile.department || "",
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.error("Failed to report live status:", err);
-    }
-  }, [user, profile]);
-
-  // Publish presence on mount if an active session exists, and heartbeat every
-  // 60s while working/break so the admin always sees the current realtime state.
-  useEffect(() => {
-    if ((session?.status === "working" || session?.status === "break") && user) {
-      void reportLive(session.status);
-      const iv = setInterval(() => void reportLive(session.status), 60000);
-      return () => clearInterval(iv);
-    }
-  }, [session?.status, user, reportLive]);
+  // Presence (liveStatus/{uid}) is reported globally by <PresenceReporter /> in
+  // App.tsx so it keeps running regardless of which page is mounted.
 
   // Enrich a verified fix with a reverse-geocoded address in the background so
   // a slow Nominatim call never blocks clock-in. Site/distance fields are kept.
@@ -311,7 +331,7 @@ export const useWorkSession = () => {
       };
       await updateDoc(
         doc(db, "users", uid, "sessions", sessionId),
-        { clockInLocation: fullLoc, updatedAt: Timestamp.now() } as unknown as Parameters<typeof updateDoc>[1]
+        { clockInLocation: fullLoc, updatedAt: Timestamp.now() } as UpdateData<DocumentData>
       );
       setSession(prev =>
         prev && prev.id === sessionId
@@ -373,28 +393,40 @@ export const useWorkSession = () => {
         };
       }
 
+      const now = Timestamp.now();
       const sessionData: Partial<WorkSession> = {
         userId: user.uid,
         date: today,
-        workStartTime: Timestamp.now(),
+        workStartTime: now,
         totalWorkDuration: 0,
         totalBreakDuration: 0,
         status: "working" as const,
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+        createdAt: now,
+        updatedAt: now,
+        // Written in the same batch below, so the session is never briefly
+        // visible without its verified geo-fence location.
+        ...(locationData ? { clockInLocation: locationData } : {}),
       };
 
       let newSession: WorkSession;
       if (session) {
-        // Update existing session
-        const updatePayload = {
-          workStartTime: Timestamp.now(),
+        // Re-opening an existing session. Fold the location into the same write so
+        // clock-in costs one round trip instead of two.
+        const payload = {
+          workStartTime: now,
           status: "working" as const,
           workEndTime: null,
-          updatedAt: Timestamp.now(),
-        } as unknown as Parameters<typeof updateDoc>[1];
-        await updateDoc(doc(db, "users", user.uid, "sessions", session.id), updatePayload);
-        newSession = { ...session, workStartTime: Timestamp.now(), status: "working", workEndTime: null };
+          updatedAt: now,
+          ...(locationData ? { clockInLocation: locationData } : {}),
+        } as UpdateData<DocumentData>;
+        await updateDoc(doc(db, "users", user.uid, "sessions", session.id), payload);
+        newSession = {
+          ...session,
+          workStartTime: now,
+          status: "working",
+          workEndTime: null,
+          ...(locationData ? { clockInLocation: locationData as ClockInLocation } : {}),
+        };
       } else {
         // Create new session
         const docRef = await addDoc(collection(db, "users", user.uid, "sessions"), sessionData);
@@ -403,25 +435,15 @@ export const useWorkSession = () => {
 
       setSession(newSession);
       setBreakLogs([]);
-      toast.success("Clocked in!");
-      void reportLive("working");
+      toast.success(
+        locationData
+          ? `Clocked in at ${locationData.siteName}!`
+          : "Clocked in!"
+      );
 
       if (locationData) {
-        // Geo-fenced clock-in: attach the verified fix now, enrich the address lazily.
-        try {
-          const payload = {
-            clockInLocation: locationData,
-            updatedAt: Timestamp.now(),
-          } as unknown as Parameters<typeof updateDoc>[1];
-          await updateDoc(doc(db, "users", user.uid, "sessions", newSession.id), payload);
-          setSession(prev =>
-            prev && prev.id === newSession.id
-              ? { ...prev, clockInLocation: locationData as ClockInLocation }
-              : prev
-          );
-        } catch (locErr) {
-          console.error("Failed to attach location:", locErr);
-        }
+        // Location is already persisted with the session; only the human-readable
+        // address is filled in afterwards, off the critical path.
         void enrichLocation(newSession.id, locationData);
         return true;
       }
@@ -434,7 +456,7 @@ export const useWorkSession = () => {
           const payload = {
             clockInLocation: captured as ClockInLocation,
             updatedAt: Timestamp.now(),
-          } as unknown as Parameters<typeof updateDoc>[1];
+          } as UpdateData<DocumentData>;
           await updateDoc(doc(db, "users", user.uid, "sessions", newSession.id), payload);
           setSession(prev =>
             prev && prev.id === newSession.id
@@ -508,7 +530,6 @@ export const useWorkSession = () => {
         status: "completed"
       });
 
-      await reportLive("offline");
       await fetchTodaySession();
       stopBreakAlert();
       setIsBreakAlertPlaying(false);
@@ -541,7 +562,6 @@ export const useWorkSession = () => {
       const newBreak = { id: docRef.id, ...breakData };
       setBreakLogs([...breakLogs, newBreak]);
       setSession({ ...session, status: "break" });
-      await reportLive("break");
     } catch (error) {
       console.error("Error starting break:", error);
     }
@@ -587,7 +607,6 @@ export const useWorkSession = () => {
         setSession({ ...session, status: "working", totalBreakDuration: totalBreak });
         stopBreakAlert();
         setIsBreakAlertPlaying(false);
-        await reportLive("working");
       }
     } catch (error) {
       console.error("Error resuming work:", error);

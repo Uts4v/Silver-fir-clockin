@@ -14,13 +14,34 @@ export interface LocationData {
 }
 
 /**
- * Fast geolocation fix — lat/lng/accuracy only (no reverse geocoding).
- * Never throws: returns null on failure or timeout. Tries a cached/low-accuracy
- * fix first, then a high-accuracy one. Used by the geo-fence clock-in path so a
- * slow address lookup never blocks clock-in.
+ * Last accepted fix, reused for a short window.
+ *
+ * Getting a real GPS fix can take seconds, and the same user taps clock-in
+ * repeatedly across a shift (clock-in, break, resume, next session). Reusing a
+ * very recent fix removes that wait. The window is deliberately short (45s) so a
+ * fix is never meaningfully stale — the employee physically cannot have moved
+ * between two taps seconds apart, so the geo-fence still proves presence.
+ */
+const FIX_CACHE_TTL = 45_000;
+let lastFix: { lat: number; lng: number; accuracy: number; at: number } | null = null;
+
+/**
+ * Geolocation fix — lat/lng/accuracy only (no reverse geocoding).
+ * Never throws: returns null on failure or timeout.
+ *
+ * A precise (GPS) fix is requested first because the geo-fence radius is often
+ * only 100–200m and a network-derived fix can be off by hundreds of metres —
+ * racing the two (as this used to) let the coarse fix "win" almost every time
+ * and employees were wrongly told their location was too imprecise. We only
+ * fall back to the fast coarse fix when the precise attempt fails or times out.
+ * A fix from the last few seconds is reused outright.
  */
 export async function getCoords(): Promise<{ lat: number; lng: number; accuracy: number } | null> {
   if (!navigator.geolocation) return null;
+
+  if (lastFix && Date.now() - lastFix.at < FIX_CACHE_TTL) {
+    return { lat: lastFix.lat, lng: lastFix.lng, accuracy: lastFix.accuracy };
+  }
 
   const attempt = (opts: PositionOptions) =>
     new Promise<GeolocationPosition | null>((resolve) => {
@@ -31,16 +52,19 @@ export async function getCoords(): Promise<{ lat: number; lng: number; accuracy:
       );
     });
 
-  const t0 = Date.now();
-  let pos =
-    (await attempt({ enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 })) ||
-    (await attempt({ enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }));
-
-  // Hard ceiling so a stuck device never hangs the clock-in flow.
-  if (Date.now() - t0 > 20000) pos = null;
-
+  let pos = await attempt({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 });
+  if (!pos) {
+    pos = await attempt({ enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 });
+  }
   if (!pos) return null;
-  return { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+
+  const fix = {
+    lat: pos.coords.latitude,
+    lng: pos.coords.longitude,
+    accuracy: pos.coords.accuracy,
+  };
+  lastFix = { ...fix, at: Date.now() };
+  return fix;
 }
 
 /**

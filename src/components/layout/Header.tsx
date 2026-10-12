@@ -65,6 +65,12 @@ export const Header = () => {
           try {
             const unreadNotes = snapshot.docs.filter(doc => {
               const data = doc.data();
+              // Per-person read state: this note is unread unless the current
+              // user appears in its readBy map. The old shared `isRead` flag is
+              // only a fallback for notes predating readBy.
+              if (data.readBy && typeof data.readBy === "object") {
+                return !data.readBy[user.uid];
+              }
               return !data.isRead;
             });
             setUnreadCount(unreadNotes.length);
@@ -199,7 +205,7 @@ export const Header = () => {
                       notifs.map((n) => (
                         <DropdownMenuItem
                           key={n.id}
-                          onClick={() => { markRead(n.id); if (n.link) navigate(n.link); }}
+                          onClick={() => { markRead(n); if (n.link) navigate(n.link); }}
                           className={`flex-col items-start gap-0.5 py-2.5 px-3 ${n.read ? "opacity-55" : ""}`}
                         >
                           <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">

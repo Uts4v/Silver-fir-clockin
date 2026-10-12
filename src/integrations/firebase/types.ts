@@ -43,7 +43,10 @@ export interface CompanySite {
   name: string;
   lat: number;
   lng: number;
-  radiusMeters: number;
+// Per-outlet radius in metres. When absent or <= 0 the outlet inherits the
+  // company-wide default (`Company.siteRadiusMeters`), so existing outlets keep
+  // working without a data migration.
+  radiusMeters?: number;
   active: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -57,7 +60,10 @@ export interface Company {
   adminUid: string;
   logoUrl?: string;
   officeLocation?: OfficeLocation;
+  // Legacy single-office radius, superseded by `siteRadiusMeters`.
   radiusMeters?: number;
+  // One clock-in radius shared by every site/outlet of this company.
+  siteRadiusMeters?: number;
   geofencingEnabled?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;

@@ -6,6 +6,7 @@ import { Header } from "@/components/layout/Header";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { TimerDisplay } from "@/components/dashboard/TimerDisplay";
 import { ActionButtons } from "@/components/dashboard/ActionButtons";
+import { EnableLocationCard } from "@/components/dashboard/EnableLocationCard";
 import { SessionInfo } from "@/components/dashboard/SessionInfo";
 import { GrindCard } from "@/components/dashboard/GrindCard";
 
@@ -138,6 +139,9 @@ const Index = () => {
               status={status}
             />
           </motion.div>
+
+          {/* Enable Location (only while clock-in is available) */}
+          {status === "idle" && <EnableLocationCard />}
 
           {/* Action Buttons */}
           <motion.div

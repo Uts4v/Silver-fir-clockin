@@ -106,13 +106,49 @@ service cloud.firestore {
       allow write: if isSignedIn() && !isBlocked() && (request.auth.uid == uid || isAdmin());
     }
 
-    // Notes/Announcements
+    // ── Sent notifications (read receipts) ─────────────────────
+    // One canonical doc per send, holding the recipient list and a readBy map
+    // (uid -> timestamp) so an admin can report "X of Y read" without reading
+    // every recipient's inbox. Admins of the company read it; each recipient may
+    // only write their own receipt key.
+    match /sentNotifications/{notificationId} {
+      allow read: if isAdmin() && sameCompany(resource.data.companyId);
+      allow create: if isSignedIn() && !isBlocked() &&
+        request.resource.data.companyId == myProfile().data.companyId;
+      // A recipient may add/refresh only their own readBy entry. The second
+      // clause is what stops a recipient from rewriting companyId, recipientIds
+      // or any other field while "recording a read". `.get('readBy', {})` keeps
+      // this working for docs written before the readBy map existed.
+      allow update: if (isAdmin() && sameCompany(resource.data.companyId)) ||
+        (isSignedIn() && !isBlocked() &&
+         resource.data.recipientIds.hasAny([request.auth.uid]) &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['readBy', 'updatedAt']) &&
+         request.resource.data.readBy.diff(resource.data.get('readBy', {}))
+           .affectedKeys().hasOnly([request.auth.uid]));
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    // Notes / announcements
     match /notes/{noteId} {
-      // Admins can read/write all notes
-      allow read, write: if isAdmin();
-      // Users can read/write notes sent to them or to all
-      allow read, write: if request.auth != null && !isBlocked() &&
+      // Admins read/write all notes
+      allow read: if isAdmin();
+      // Users can read notes sent to them or to all
+      allow read: if request.auth != null && !isBlocked() &&
         (resource.data.recipientId == request.auth.uid || resource.data.recipientId == 'all');
+      allow create: if isAdmin();
+      // Admins may edit/delete; a recipient may only record their own read
+      // receipt. The previous shared `isRead` flag is kept for older docs, and
+      // `.get('readBy', {})` lets a note written before readBy existed be
+      // marked read for the first time instead of failing the diff.
+      allow update: if isAdmin() ||
+        (request.auth != null && !isBlocked() &&
+         (resource.data.recipientId == request.auth.uid || resource.data.recipientId == 'all') &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['readBy', 'updatedAt']) &&
+         request.resource.data.readBy.diff(resource.data.get('readBy', {}))
+           .affectedKeys().hasOnly([request.auth.uid]));
+      allow delete: if isAdmin();
     }
 
     // Personal Notes

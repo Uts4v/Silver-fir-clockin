@@ -105,6 +105,8 @@ const LeaveRequests = () => {
       toast.success("Leave request submitted");
       notifyLeaveSubmitted({
         companyId: profile.companyId || "",
+        senderId: user.uid,
+        senderName: profile.fullName,
         employeeName: profile.fullName,
         dates: `${startDate} → ${endDate}`,
         reason: reason.trim(),
@@ -133,6 +135,9 @@ const LeaveRequests = () => {
       toast.success(`Leave ${status}`);
       if (req) {
         notifyLeaveReviewed({
+          companyId: profile?.companyId || req?.companyId || "",
+          senderId: user?.uid || "",
+          senderName: profile?.fullName || "Admin",
           employeeId: req.employeeId,
           status,
           reviewerName: profile?.fullName,

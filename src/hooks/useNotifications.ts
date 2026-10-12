@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import { collection, query, orderBy, limit, onSnapshot, updateDoc, doc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/client";
-import { AppNotification } from "@/integrations/notifications";
+import { AppNotification, recordRead } from "@/integrations/notifications";
 import { useAuthContext } from "@/contexts/AuthContext";
 
 export const useNotifications = () => {
-  const { user } = useAuthContext();
+  const { user, profile } = useAuthContext();
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Must return: without it `user.uid` below throws while signed out.
     if (!user) {
       setItems([]);
       setLoading(false);
+      return;
     }
 
     const q = query(
@@ -30,24 +32,37 @@ export const useNotifications = () => {
     return () => unsub();
   }, [user]);
 
-  const markRead = useCallback(async (id: string) => {
-    if (!user) return;
+  // Flags the item read locally and records the receipt the admin counts.
+  const markRead = useCallback(async (n: AppNotification) => {
+    if (!user || n.read) return;
+    const id = n.notificationId || n.id;
+    // Optimistic so the dropdown feels instant; the receipt write follows.
+    setItems(prev => prev.map(x => (x.id === n.id ? { ...x, read: true } : x)));
     try {
-      await updateDoc(doc(db, "notifications", user.uid, "items", id), { read: true });
+      await recordRead({
+        uid: user.uid,
+        notificationId: id,
+        companyId: n.companyId || profile?.companyId || "",
+      });
     } catch (e) {
       console.warn("markRead failed:", e);
+      // Fall back to the per-recipient flag so the badge is still correct even
+      // if the shared receipt could not be written.
+      try {
+        await updateDoc(doc(db, "notifications", user.uid, "items", n.id), { read: true });
+      } catch (inner) {
+        console.warn("markRead fallback failed:", inner);
+      }
     }
-    setItems(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
-  }, [user]);
+  }, [user, profile?.companyId]);
 
   const markAllRead = useCallback(async () => {
     if (!user) return;
     const unread = items.filter(n => !n.read);
-    await Promise.all(unread.map(n =>
-      updateDoc(doc(db, "notifications", user.uid, "items", n.id), { read: true }).catch(() => {})
-    ));
+    if (unread.length === 0) return;
     setItems(prev => prev.map(n => ({ ...n, read: true })));
-  }, [user, items]);
+    await Promise.allSettled(unread.map(n => markRead(n)));
+  }, [user, items, markRead]);
 
   const unread = items.filter(n => !n.read).length;
 

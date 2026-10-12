@@ -56,8 +56,20 @@ export const SessionInfo = ({ session, breakLogs }: SessionInfoProps) => {
               </span>
             </div>
             {session.clockInLocation && (
-              <div className="mt-1 text-xs text-muted-foreground truncate">
-                📍 {session.clockInLocation.label}
+              <div className="mt-2 rounded-lg px-2.5 py-1.5 bg-muted/40 border border-border/60">
+                <div className="text-xs font-medium text-foreground truncate">
+                  {session.clockInLocation.siteId
+                    ? `Clocked in at: ${session.clockInLocation.siteName || session.clockInLocation.label}`
+                    : `📍 ${session.clockInLocation.label}`}
+                </div>
+                {session.clockInLocation.siteId && (
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {typeof session.clockInLocation.distanceMeters === "number" &&
+                      `${session.clockInLocation.distanceMeters}m from the outlet centre`}
+                    {typeof session.clockInLocation.distanceMeters === "number" && " · "}
+                    verified inside geo-fence
+                  </div>
+                )}
               </div>
             )}
           </div>

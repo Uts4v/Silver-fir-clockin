@@ -1,8 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UserWithStats } from "../../pages/Admin";
+
+// A configured geo-fence outlet, drawn as a circle so the admin can see where
+// clock-ins are allowed. Radius is already resolved (override or company default).
+export interface MapSite {
+  name: string;
+  lat: number;
+  lng: number;
+  radius: number;
+  active: boolean;
+}
 
 interface AllEmployeesLocationsMapProps {
   users: UserWithStats[];
+  sites?: MapSite[];
+  // Live status resolver so the "ACTIVE"/"NOW" badge reflects whether the
+  // employee is working right now, not merely that they have a recent pin.
+  statusOf?: (u: UserWithStats) => string;
 }
 
 // ── Leaflet loader (injected once) ───────────────────────────────────────────
@@ -49,9 +63,11 @@ interface PinData {
   color: string;
   initials: string;
   isLatest: boolean; // latest session for this employee
+  isActive: boolean; // working / on break right now
+  liveStatus: string; // "working" | "break" | "offline"
 }
 
-export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocationsMapProps) {
+export default function AllEmployeesLocationsMap({ users, sites, statusOf }: AllEmployeesLocationsMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<Map<string, any>>(new Map()); // employeeName → leaflet marker
@@ -59,54 +75,63 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // ── Build pin data from users ──────────────────────────────────────────────
-  const employeeColorMap = new Map<string, string>();
-  const allPins: PinData[] = [];
+  // ── Build pin data from users (memoised: Admin re-renders every second while
+  // its clock ticks, but the map should only rebuild when data really changes) ─
+  const { employeeColorMap, uniqueEmployees, allPins, displayPins } = useMemo(() => {
+    const colorMap = new Map<string, string>();
+    const unique = [...new Set(
+      users.map((u) => u.fullName || u.email || "Unknown")
+    )];
+    unique.forEach((name, idx) => {
+      colorMap.set(name, EMPLOYEE_COLORS[idx % EMPLOYEE_COLORS.length]);
+    });
 
-  // Assign stable colours per unique employee
-  const uniqueEmployees = [...new Set(
-    users.map((u) => u.fullName || u.email || "Unknown")
-  )];
-  uniqueEmployees.forEach((name, idx) => {
-    employeeColorMap.set(name, EMPLOYEE_COLORS[idx % EMPLOYEE_COLORS.length]);
-  });
+    const pins: PinData[] = [];
+    users.forEach((user) => {
+      const employeeName = user.fullName || user.email || "Unknown";
+      const color = colorMap.get(employeeName) ?? "#6b7280";
+      const sessions = (user.sessionHistory ?? []).filter((s) => s.clockInLocation);
+      const liveStatus = statusOf?.(user) ?? "offline";
+      const isActive = liveStatus === "working" || liveStatus === "break";
 
-  users.forEach((user) => {
-    const employeeName = user.fullName || user.email || "Unknown";
-    const color = employeeColorMap.get(employeeName) ?? "#6b7280";
-    const sessions = (user.sessionHistory ?? []).filter((s) => s.clockInLocation);
+      sessions.forEach((session, sIdx) => {
+        const loc = session.clockInLocation!;
+        const time =
+          session.createdAt?.toDate?.().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          }) ?? "";
 
-    sessions.forEach((session, sIdx) => {
-      const loc = session.clockInLocation!;
-      const time =
-        session.createdAt?.toDate?.().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        }) ?? "";
-
-      allPins.push({
-        lat: loc.lat,
-        lng: loc.lng,
-        employeeName,
-        employeeEmail: user.email ?? "",
-        date: session.date,
-        time,
-        accuracy: loc.accuracy,
-        label: loc.label,
-        color,
-        initials: getInitials(employeeName),
-        isLatest: sIdx === 0, // sessionHistory assumed newest-first
+        pins.push({
+          lat: loc.lat,
+          lng: loc.lng,
+          employeeName,
+          employeeEmail: user.email ?? "",
+          date: session.date,
+          time,
+          accuracy: loc.accuracy,
+          label: loc.label,
+          color,
+          initials: getInitials(employeeName),
+          isLatest: sIdx === 0, // sessionHistory assumed newest-first
+          isActive,
+          liveStatus,
+        });
       });
     });
-  });
+
+    return {
+      employeeColorMap: colorMap,
+      uniqueEmployees: unique,
+      allPins: pins,
+      displayPins: pins.filter((p) => p.isLatest), // latest location per employee
+    };
+  }, [users, statusOf]);
 
   // Filtered pins for the list panel
   const filteredEmployees = uniqueEmployees.filter((name) =>
     name.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  // only show the most recent location for each employee
-  const displayPins = allPins.filter((p) => p.isLatest);
 
   // ── Load Leaflet ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -143,12 +168,28 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
       }
     ).addTo(map);
 
-    if (displayPins.length === 0) {
+    const bounds: [number, number][] = [];
+
+    // Draw every configured outlet's clock-in radius first so employee pins sit
+    // on top of the circles.
+    (sites ?? []).forEach((site) => {
+      if (!Number.isFinite(site.lat) || !Number.isFinite(site.lng) || !(site.radius > 0)) return;
+      const circleColor = site.active ? "#10b981" : "#94a3b8";
+      L.circle([site.lat, site.lng], {
+        radius: site.radius,
+        color: circleColor,
+        weight: 1.5,
+        opacity: 0.9,
+        fillColor: circleColor,
+        fillOpacity: 0.12,
+      }).addTo(map).bindTooltip(`${site.name} · ${site.radius}m`, { direction: "top" });
+      bounds.push([site.lat, site.lng]);
+    });
+
+    if (displayPins.length === 0 && bounds.length === 0) {
       map.setView([20, 0], 2);
       return;
     }
-
-    const bounds: [number, number][] = [];
 
     displayPins.forEach((pin) => {
       const iconHtml = `
@@ -165,7 +206,7 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
               font-family="'DM Sans',system-ui,sans-serif"
               font-size="9" font-weight="800" fill="${pin.color}">${pin.initials}</text>
           </svg>
-          ${pin.isLatest ? `
+          ${pin.isActive ? `
           <div style="
             position:absolute;top:-9px;right:-10px;
             background:#22c55e;color:white;
@@ -276,7 +317,7 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
         mapInstanceRef.current = null;
       }
     };
-  }, [ready, users]);
+  }, [ready, displayPins, sites]);
 
   // ── Fly-to on employee select ───────────────────────────────────────────────
   function flyToEmployee(name: string) {
@@ -291,7 +332,7 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
   }
 
   // ── Empty state ─────────────────────────────────────────────────────────────
-  const hasAnyLocation = displayPins.length > 0;
+  const hasAnyLocation = displayPins.length > 0 || (sites?.length ?? 0) > 0;
 
   return (
     <div className="flex flex-col h-full gap-6">
@@ -404,9 +445,15 @@ export default function AllEmployeesLocationsMap({ users }: AllEmployeesLocation
                       <span className="text-xs font-semibold text-foreground truncate">
                         {name}
                       </span>
-                      {latestPin.isLatest && employeePins.length > 0 && (
-                        <span className="text-[8px] font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full border border-green-200 flex-shrink-0">
-                          ACTIVE
+                      {latestPin.isActive && (
+                        <span
+                          className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full border flex-shrink-0 ${
+                            latestPin.liveStatus === "break"
+                              ? "text-amber-600 bg-amber-50 border-amber-200"
+                              : "text-green-600 bg-green-50 border-green-200"
+                          }`}
+                        >
+                          {latestPin.liveStatus === "break" ? "ON BREAK" : "WORKING"}
                         </span>
                       )}
                     </div>
