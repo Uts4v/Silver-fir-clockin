@@ -10,12 +10,17 @@ export type GeoPermission = "unsupported" | "prompt" | "granted" | "denied";
  * Why a dedicated hook: when location is switched off in the browser (or the
  * employee previously tapped "Block"), the plain clock-in flow just fails with a
  * vague error. This lets the UI offer a clear "Enable location" button, trigger
- * the permission prompt, and — when the browser has hard-denied access — tell the
- * employee exactly how to switch it back on.
+ * the permission prompt, and — when access is actually blocked — show the right
+ * recovery steps (which differ between a browser tab and an installed PWA).
+ *
+ * `blocked` covers platforms (notably iOS PWAs) where the Permissions API can't
+ * report geolocation: there, a denied fix comes back as a plain failure, so we
+ * treat a failed request as "needs setup" instead of silently retrying forever.
  */
 export function useGeolocation() {
   const supported = typeof navigator !== "undefined" && !!navigator.geolocation;
   const [permission, setPermission] = useState<GeoPermission>(supported ? "prompt" : "unsupported");
+  const [blocked, setBlocked] = useState(false);
   const [checking, setChecking] = useState(supported);
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +29,11 @@ export function useGeolocation() {
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
+  }, []);
+
+  const applyState = useCallback((state: GeoPermission) => {
+    setPermission(state);
+    if (state === "granted") setBlocked(false);
   }, []);
 
   const queryPermission = useCallback(async (): Promise<GeoPermission> => {
@@ -38,18 +48,18 @@ export function useGeolocation() {
   }, [supported]);
 
   // Read the current permission once, then stay in sync with changes the user
-  // makes in the browser's address-bar / site settings.
+  // makes in the browser/OS settings.
   useEffect(() => {
     let status: PermissionStatus | null = null;
     let cancelled = false;
     const onChange = () => {
-      if (status && mountedRef.current) setPermission(status.state as GeoPermission);
+      if (status && mountedRef.current) applyState(status.state as GeoPermission);
     };
 
     (async () => {
       const state = await queryPermission();
       if (cancelled || !mountedRef.current) return;
-      setPermission(state);
+      applyState(state);
       setChecking(false);
       if (supported && navigator.permissions?.query) {
         try {
@@ -65,7 +75,7 @@ export function useGeolocation() {
       cancelled = true;
       status?.removeEventListener?.("change", onChange);
     };
-  }, [queryPermission, supported]);
+  }, [applyState, queryPermission, supported]);
 
   /** Request a location fix (this is what pops the browser permission prompt). */
   const enable = useCallback(async (): Promise<boolean> => {
@@ -74,26 +84,27 @@ export function useGeolocation() {
     try {
       const fix = await getCoords();
       if (fix) {
-        if (mountedRef.current) setPermission("granted");
+        if (mountedRef.current) {
+          applyState("granted");
+          setError(null);
+        }
         return true;
       }
-      const state = await queryPermission();
       if (mountedRef.current) {
-        setPermission(state);
-        setError(
-          state === "denied"
-            ? "Location is blocked for this site. Enable it in your browser's site settings, then tap Retry."
-            : "Couldn't get your location. Make sure your device's GPS / Location is switched on, then tap Retry."
-        );
+        setBlocked(true);
+        setError("Couldn't get your location. Enable it using the steps below, then tap Retry.");
       }
       return false;
     } catch {
-      if (mountedRef.current) setError("Couldn't get your location. Please try again.");
+      if (mountedRef.current) {
+        setBlocked(true);
+        setError("Couldn't get your location. Please try again.");
+      }
       return false;
     } finally {
       if (mountedRef.current) setRequesting(false);
     }
-  }, [queryPermission]);
+  }, [applyState]);
 
-  return { permission, checking, requesting, error, enable, supported };
+  return { permission, blocked, checking, requesting, error, enable, supported };
 }
